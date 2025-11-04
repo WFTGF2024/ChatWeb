@@ -1,0 +1,8 @@
+mysql:
+  host: localhost
+  port: 3306
+  user: Qiniu
+  password: 20250922
+  database: Qiniu_Project
+app_log_file: logs/app.log
+server_port: 5000
