@@ -47,3 +47,27 @@ npm run dev
 ## 可选步骤（后续开发）
 1. 由于Qwen3-VL系列的免费推理API只支持图片URL形式。因此需要一个公网资源服务器。这是file_server的作用，对应的云服务是对象存储。
 2. backend-AI/model下还有一个Qwen-VL_API.py，是后续多模态语音聊天的扩展。
+
+
+# 运行项目
+
+1. 安装 `Go>1.20`,并把Go应用的bin文件夹的绝对路径加入到你的系统Path中
+2. 确保 `MySQL` 数据库已启动并创建 `Qiniu_Project` 数据库
+3. 根据实际情况修改 `config.yaml` 中的数据库连接信息和服务器设置
+在 `backend`目录运行以下命令
+```bash
+go mod init backend
+go mod tidy
+go run main.go -r ./config.yaml
+```
+config.yaml若未给出，可以按下列格式新建给出：
+```yaml
+mysql:
+  host: localhost
+  port: 3306
+  user: root
+  password: yourpassword
+  database: Qiniu_Project
+app_log_file: logs/app.log
+server_port: 8080
+```

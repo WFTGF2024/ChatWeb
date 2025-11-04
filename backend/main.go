@@ -46,6 +46,20 @@ func setupRouter() *gin.Engine {
 	// 创建API路由组
 	api := r.Group("/api")
 
+	// Web路由组
+	web := r.Group("/web")
+	{
+		web.POST("/ingest", handlers.HandleWebIngest)
+		web.POST("/chunk", handlers.HandleWebChunk)
+	}
+
+	// Chat路由组
+	chat := r.Group("/chat")
+	{
+		chat.GET("/history", handlers.HandleChatHistory)
+		chat.POST("/file-bridge", handlers.HandleFileServerBridge)
+	}
+
 	// 认证相关路由
 	auth := api.Group("/auth")
 	{
