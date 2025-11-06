@@ -1,78 +1,144 @@
-
 <template>
-  <div class="col" style="gap:16px; max-width: 980px; margin: 0 auto;">
-    <div class="row" style="justify-content:space-between; align-items:center;">
-      <b>Web Search</b>
-      <router-link class="btn ghost" to="/chat">返回聊天</router-link>
-    </div>
+  <div class="wrap">
+    <h2>Web Search</h2>
 
-    <div class="card col" style="gap:12px;">
-      <div class="row" style="gap:8px; align-items:center;">
-        <input class="input" v-model="q" placeholder="输入关键词，按回车搜索" @keyup.enter="go" style="flex:1" />
-        <select class="select" v-model="mode" style="max-width:160px;">
-          <option value="hybrid">Hybrid</option>
+    <div class="card">
+      <div class="row" style="gap:10px; align-items:center;">
+        <input class="input flex1" v-model="q" placeholder="输入关键词，如：golang、LLM……"/>
+        <select v-model="mode" class="select">
           <option value="semantic">Semantic</option>
-          <option value="lexical">Lexical</option>
+          <option value="keyword">Keyword</option>
         </select>
-        <input class="input" v-model.number="top_k" type="number" min="1" max="20" style="width:120px" />
-        <button class="btn" @click="go" :disabled="!q || loading">搜索</button>
+        <input class="input w80" v-model.number="topK" type="number" min="1" placeholder="TopK"/>
+        <button class="btn primary" :disabled="loading" @click="doSearch">
+          {{ loading ? '搜索中…' : '搜索' }}
+        </button>
       </div>
-      <small class="hint">该功能仅在此菜单页提供，聊天页面已移除联网搜索。</small>
+
+      <div class="row" style="gap:10px; margin-top:8px;">
+        <input class="input flex1" v-model="urlsText" placeholder="可选：输入要抓取的URL，支持逗号/空格分隔，回车后会入库"/>
+        <label class="row" style="gap:6px; align-items:center;">
+          <input type="checkbox" v-model="fetchOn" />
+          抓取外网并入库
+        </label>
+      </div>
+
+      <p class="tip">该功能仅在此菜单页提供，聊天页面已移除联网搜索。</p>
     </div>
 
-    <div class="card col" v-if="results.length">
-      <div v-for="(r,idx) in results" :key="r.page_id" class="result-row">
-        <div class="row" style="justify-content:space-between; align-items:center;">
-          <div class="col">
-            <a class="link" :href="r.url" target="_blank">{{ r.title || r.url }}</a>
-            <small class="hint" style="margin-top:4px;">score={{ r.score?.toFixed?.(3) }} | {{ r.url }}</small>
-          </div>
-          <button class="btn ghost" @click="preview(r.page_id)">预览</button>
+    <!-- 结果区 -->
+    <div class="card" v-if="err">
+      <div class="err">{{ err }}</div>
+    </div>
+
+    <div class="card" v-if="!loading && results.length===0 && !err">
+      <div class="empty">
+        <div>没有结果。</div>
+        <div class="sub">建议：先在“URL”输入框里放一个网址（如 <code>https://go.dev/</code>），勾选“抓取外网并入库”，再搜索关键字。</div>
+      </div>
+    </div>
+
+    <div class="list" v-if="results.length">
+      <div class="item" v-for="r in results" :key="r.id || r.url">
+        <div class="title">
+          <a :href="r.url" target="_blank" rel="noreferrer">{{ r.title || r.url }}</a>
         </div>
-        <p class="desc">{{ r.snippet }}</p>
+        <div class="meta">
+          <code>{{ r.url }}</code>
+          <span v-if="r.score" class="score">score: {{ r.score }}</span>
+        </div>
+        <div class="snippet" v-if="r.snippet">{{ r.snippet }}</div>
+        <div class="ops">
+          <button class="btn ghost" @click="openPage(r)">查看全文</button>
+        </div>
       </div>
-    </div>
-
-    <div class="card col" v-if="previewPage">
-      <div class="row" style="justify-content:space-between; align-items:center;">
-        <b>页面预览</b>
-        <button class="btn ghost" @click="previewPage=null">关闭</button>
-      </div>
-      <h3>{{ previewPage?.title }}</h3>
-      <pre class="pre">{{ previewPage?.content }}</pre>
     </div>
   </div>
 </template>
+
 <script setup>
 import { ref } from 'vue'
-import { webSearch, getPage } from '../api/websearch'
+import { webAPI } from '../api/http'
 
 const q = ref('')
-const mode = ref('hybrid')
-const top_k = ref(6)
-const results = ref([])
-const previewPage = ref(null)
-const loading = ref(false)
+const urlsText = ref('')
+const topK = ref(6)
+const mode = ref('semantic')   // 目前后端未用到，只做保留
+const fetchOn = ref(true)
 
-async function go(){
-  if(!q.value) return
+const loading = ref(false)
+const err = ref('')
+const results = ref([])
+
+function parseUrls(text){
+  return (text || '')
+    .split(/[\s,;]+/)
+    .map(s => s.trim())
+    .filter(s => /^https?:\/\//i.test(s))
+}
+
+async function doSearch(){
+  err.value = ''
+  results.value = []
   loading.value = true
   try{
-    const data = await webSearch({ q: q.value, top_k: top_k.value, mode: mode.value, alpha: 0.6 })
-    results.value = data?.results || []
-  } finally {
+    const payload = {
+      q: q.value.trim(),
+      urls: parseUrls(urlsText.value),
+      fetch: !!fetchOn.value,
+      top_k: Number(topK.value) || 6
+    }
+    // 关键：取 data.results（兼容 items/raw）
+    const { data } = await webAPI.search(payload)
+    results.value = data?.results || data?.items || data || []
+  }catch(e){
+    err.value = e?.response?.data?.error || e?.message || '搜索失败'
+  }finally{
     loading.value = false
   }
 }
-async function preview(page_id){
-  previewPage.value = await getPage(page_id)
+
+async function openPage(r){
+  try {
+    const id = r.id
+    if (!id) {
+      // 没有 id 也允许直接打开 url
+      if (r.url) window.open(r.url, '_blank')
+      return
+    }
+    const { data } = await webAPI.page(id)
+    const blob = new Blob([data.content || ''], { type:'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    window.open(url, '_blank')
+    setTimeout(()=>URL.revokeObjectURL(url), 30000)
+  } catch(e) {
+    console.warn('get page failed', e)
+  }
 }
 </script>
+
 <style scoped>
-.result-row{ padding: 10px 0; border-bottom: 1px dashed rgba(0,0,0,.08); }
-.result-row:last-child{ border-bottom: none; }
-.desc{ color: var(--m-muted); margin: 8px 0 0; white-space: pre-wrap; }
-.pre{ white-space: pre-wrap; background: rgba(0,0,0,.02); padding: 12px; border-radius: 8px; }
-.link{ color: #1b6ac9; text-decoration: none; }
-.link:hover{ text-decoration: underline; }
+.wrap { padding: 10px 12px; }
+.card { background:#fff; border-radius:12px; padding:14px; box-shadow:0 4px 16px rgba(0,0,0,.05); margin:12px 0; }
+.row { display:flex; }
+.flex1 { flex:1; }
+.input { flex:1; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; outline:none; }
+.input:focus{ border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.14); }
+.select { border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; }
+.w80 { width:80px; }
+.btn { padding:10px 14px; border-radius:8px; border:none; cursor:pointer; }
+.btn.primary { background:#2563eb; color:#fff; }
+.btn.ghost { background:#f3f4f6; color:#111827; }
+.tip { margin-top:8px; color:#6b7280; }
+.err { color:#ef4444; }
+.list { display:flex; flex-direction:column; gap:10px; }
+.item { background:#fff; border-radius:12px; padding:12px 14px; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+.title a { font-weight:600; color:#111827; text-decoration:none; }
+.title a:hover { text-decoration:underline; }
+.meta { color:#6b7280; margin-top:4px; display:flex; gap:8px; align-items:center; }
+.score { background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:6px; font-size:12px; }
+.snippet { margin-top:6px; color:#374151; line-height:1.6; }
+.ops { margin-top:8px; }
+.empty { color:#6b7280; }
+.sub { font-size:13px; margin-top:4px; }
 </style>
