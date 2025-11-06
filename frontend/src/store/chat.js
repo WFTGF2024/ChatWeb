@@ -5,6 +5,7 @@ export const useChatStore = defineStore('chat', {
     currentRole: roles[0],
     messages: [],     // {role:'user'|'assistant'|'system', content, ts, audioUrl?}
     memorySummary: '',
+    kbContext: '', 
     deepQuestions: [],
     pending: false,
     settings: {

@@ -1,7 +1,7 @@
 <template>
   <div class="col">
     <div class="row" style="justify-content:space-between;align-items:center;">
-      <b>会员</b>
+      <b>会员中心</b>
       <router-link class="btn ghost" to="/profile">账号</router-link>
     </div>
     <div class="card col">
@@ -13,6 +13,7 @@
         <div class="row" style="gap:16px; align-items:center;">
           <button class="btn" @click="refresh">刷新</button>
           <button class="btn secondary" @click="buy">购买月度会员（¥29）</button>
+          <small v-if="toast" class="hint">{{ toast }}</small>
         </div>
         <div class="card">
           <b>当前会员</b>
@@ -33,6 +34,7 @@ import { getMembership, listOrders, createOrder } from '../api/core'
 
 const user = useUserStore()
 const membership = ref(null)
+const toast = ref('')
 const orders = ref([])
 
 async function refresh(){
@@ -45,7 +47,7 @@ async function refresh(){
 }
 async function buy(){
   const data = await createOrder({ user_id: user.user.user_id, duration_months: 1, amount: 29, payment_method: 'wechat' })
-  alert('下单成功：' + JSON.stringify(data))
+  toast.value = '下单成功：订单号 ' + (data?.order_id || '')
   refresh()
 }
 </script>

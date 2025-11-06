@@ -5,6 +5,7 @@ import Register from '../pages/Register.vue'
 import RoleLibrary from '../pages/RoleLibrary.vue'
 import Membership from '../pages/Membership.vue'
 import Profile from '../pages/Profile.vue'
+import WebSearch from '../pages/WebSearch.vue'
 
 const routes = [
   { path: '/', redirect: '/chat' },
@@ -14,6 +15,7 @@ const routes = [
   { path: '/register', component: Register },
   { path: '/membership', component: Membership },
   { path: '/profile', component: Profile },
+  { path: '/web-search', component: WebSearch },
 ]
 
 const router = createRouter({

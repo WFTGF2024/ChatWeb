@@ -136,3 +136,18 @@ a:hover{ opacity: 1 }
 .faint{ color: var(--m-muted); }
 small.hint{ color: var(--m-muted); }
 hr.sep{ border: none; height:1px; background: rgba(0,0,0,.06); margin:8px 0; }
+
+
+/* custom polish */
+.select{
+  appearance: none;
+  background: white;
+  border-radius: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0,0,0,.08);
+  box-shadow: var(--shadow);
+}
+.badge{ background: rgba(0,0,0,.06); padding: 4px 8px; border-radius: 8px; }
+.card{ border: 1px solid rgba(0,0,0,.06); }
+.link{ color: #1b6ac9; text-decoration: none; }
+.link:hover{ text-decoration: underline; }

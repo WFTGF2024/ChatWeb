@@ -2,14 +2,18 @@
   <div class="chat-wrap">
     <ChatHeader :role="role">
       <div class="row">
-        <!-- 多会话：选择 / 新建 / 删除（若未接入 chatCache，可把这三项去掉） -->
+        <!-- 多会话：选择 / 新建 / 删除 -->
         <select v-model="chatId" class="select" style="margin-right:8px" v-if="chatList.length">
           <option v-for="c in chatList" :key="c.id" :value="c.id">{{ c.title }}</option>
         </select>
         <button class="btn ghost" @click="newChat" title="新建会话">＋新建</button>
         <button class="btn ghost danger" :disabled="!chatId" @click="removeChat" title="删除当前会话">🗑 删除</button>
 
-        <TTSVoicePicker v-model="tts" />
+        <!-- ① 角色风格 → 绑定音色 -->
+        <select v-model="selectedVoicePreset" class="select" style="margin-left:8px; max-width:160px;">
+          <option v-for="p in voicePresets" :key="p.id" :value="p.id">{{ p.label }}</option>
+        </select>
+
         <button class="btn ghost" @click="toggleVoice" title="是否自动播放TTS">
           {{ settings.voiceEnabled ? '🔊 自动播放开' : '🔇 自动播放关' }}
         </button>
@@ -21,19 +25,17 @@
     <LoginGate v-if="!isLogin" />
 
     <div class="chat-list">
-      <!-- 始终传 text；assistant 打开 is-html 并传 Markdown-HTML -->
       <MessageBubble
         v-for="(m,i) in messages"
         :key="m.ts ?? i"
         :who="m.role==='user' ? 'user' : 'ai'"
-        :avatar="m.role==='user' ? '👤' : (role.avatar || '🤖')"
-        :text="m.role==='assistant' ? toHtml(m.content) : m.content"
-        :is-html="m.role==='assistant'"
+        :avatar="m.role==='user' ? '👤' : '🤖'"
       >
-        <template #meta>
-          <span>{{ new Date(m.ts).toLocaleTimeString() }}</span>
-
-          <!-- TTS 成功后可选择播放/不播放 -->
+        <template #default>
+          <div v-if="m.role==='assistant'" v-html="toHtml(m.content)"></div>
+          <div v-else>{{ m.content }}</div>
+        </template>
+        <template #extra>
           <template v-if="m.role==='assistant'">
             <span v-if="m.audioUrl" style="margin-left:8px; opacity:.8;">WAV已生成</span>
             <button
@@ -55,7 +57,6 @@
               @click="downloadFromUrl(m.audioUrl, `tts_${m.ts||Date.now()}.wav`)"
             >⬇️ 下载</button>
           </template>
-
           <a v-if="m.audioUrl" :href="m.audioUrl" target="_blank" style="margin-left:6px;">打开</a>
         </template>
       </MessageBubble>
@@ -64,9 +65,22 @@
     <DeepQuestionChips :items="deepQuestions" @pick="useQuestion" />
 
     <div class="chat-input">
-      <input class="input" v-model="text" placeholder="说点什么…" style="flex:1;" @keydown.enter="sendText" />
-      <AudioRecorder @done="onAudioDone" />
-      <button class="btn" :disabled="pending" @click="sendText">发送</button>
+      <textarea
+        v-model="text"
+        class="input"
+        rows="3"
+        placeholder="说点什么……"
+        @keyup.enter.exact.prevent="send()"
+      ></textarea>
+      <div class="row" style="justify-content:space-between; gap:8px; margin-top:6px;">
+        <AudioRecorder @done="useASR" />
+        <label class="row" style="gap:6px; align-items:center;">
+          <input type="checkbox" v-model="autoSendASR" /> 语音识别后自动发送
+        </label>
+        <div class="row" style="gap:6px;">
+          <button class="btn primary" :disabled="pending" @click="send">发送</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -78,16 +92,13 @@ import { useUserStore } from '../store/user'
 import { buildSystemPrompt } from '../utils/prompts'
 import { chatStream, chatOnce } from '../api/llm'
 import { asrFull } from '../api/asr'
-import { synthesizeTTS } from '../api/tts'   // 走 /tts 代理，返回 Blob 或 {url, blob}
+import { synthesizeTTS } from '../api/tts'   // 走 /tts 代理
 import AudioRecorder from '../components/AudioRecorder.vue'
 import MessageBubble from '../components/MessageBubble.vue'
 import DeepQuestionChips from '../components/DeepQuestionChips.vue'
 import LoginGate from '../components/LoginGate.vue'
-import TTSVoicePicker from '../components/TTSVoicePicker.vue'
 import ChatHeader from '../components/ChatHeader.vue'
 import MarkdownIt from 'markdown-it'
-
-/* 多会话本地缓存（localStorage） */
 import {
   listChats, createChat as createSession, deleteChat as deleteSession,
   loadChat as loadSession, saveChat as saveSession, renameChat
@@ -97,70 +108,99 @@ const chat = useChatStore()
 const user = useUserStore()
 
 const text = ref('')
-const tts = ref({ style: chat.settings.ttsStyle, emoWeight: chat.settings.emoWeight })
-const role = computed(()=> chat.currentRole)
-const messages = computed(()=> chat.messages)
-const deepQuestions = computed(()=> chat.deepQuestions)
-const settings = chat.settings
-const isLogin = computed(()=> user.isLogin)
-const pending = computed(()=> chat.pending)
-const canSave = computed(()=> chat.messages.length>0)
+const autoSendASR = ref(true)
 
-/* Markdown 渲染器（最小配置） */
-const md = new MarkdownIt({ html:false, linkify:true, breaks:true })
+// ① 角色风格预设：一个风格绑定一个参考音色
+const voicePresets = [
+  { id: 'neutral', label: '通用助手', ttsStyle: 'style1', emoWeight: 0.65 },
+  { id: 'interview', label: '面试官访谈', ttsStyle: 'style2', emoWeight: 0.55 },
+  { id: 'story', label: '故事/角色', ttsStyle: 'style3', emoWeight: 0.8 }
+]
+const selectedVoicePreset = ref('neutral')
+
+const role = computed(() => chat.currentRole)
+const messages = computed(() => chat.messages)
+const deepQuestions = computed(() => chat.deepQuestions)
+const settings = chat.settings
+const isLogin = computed(() => user.isLogin)
+const pending = computed(() => chat.pending)
+const canSave = computed(() => chat.messages.length > 0)
+
+/* Markdown 渲染 */
+const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 const toHtml = (t) => md.render(t || '')
 
-/* 简单播放器：同一时间只播一个；是否播放由用户手动决定（或自动开关） */
+/* 简单播放器 */
 const currentAudio = ref(null)
 const currentUrl = ref('')
-function isPlaying(m){ return !!currentAudio.value && currentUrl.value===m.audioUrl && !currentAudio.value.paused }
-function play(m){
+function isPlaying (m) {
+  return !!currentAudio.value && currentUrl.value === m.audioUrl && !currentAudio.value.paused
+}
+function play (m) {
   try {
     if (!m?.audioUrl) return
     stop()
     currentUrl.value = m.audioUrl
     currentAudio.value = new Audio(m.audioUrl)
-    currentAudio.value.onended = () => { currentAudio.value=null; currentUrl.value='' }
-    currentAudio.value.play().catch(()=>{})
+    currentAudio.value.onended = () => { currentAudio.value = null; currentUrl.value = '' }
+    currentAudio.value.play().catch(() => {})
   } catch {}
 }
-function stop(){
-  try { if (currentAudio.value){ currentAudio.value.pause(); currentAudio.value.currentTime=0 } } catch {}
+function stop () {
+  try {
+    if (currentAudio.value) {
+      currentAudio.value.pause()
+      currentAudio.value.currentTime = 0
+    }
+  } catch {}
   currentAudio.value = null
   currentUrl.value = ''
 }
-function downloadFromUrl(url, filename){
+function downloadFromUrl (url, filename) {
   const a = document.createElement('a')
-  a.href = url; a.download = filename || `tts_${Date.now()}.wav`
-  document.body.appendChild(a); a.click(); a.remove()
+  a.href = url
+  a.download = filename || `tts_${Date.now()}.wav`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
 }
 
-watch(tts, (v)=>{ chat.settings.ttsStyle=v.style; chat.settings.emoWeight=v.emoWeight }, { deep:true })
-
-function parseDeepQuestions(text){
-  const m = text.match(/\[DEEP_QUESTIONS\]([\s\S]*?)\[END\]/i)
-  if(!m) return []
-  const lines = m[1].split(/\n|\r/).map(s=>s.trim()).filter(Boolean)
-  return lines.map(s=> s.replace(/^[-•\d\.\)\s]*/,'').trim()).filter(Boolean).slice(0,2)
+/* ====== 角色风格应用 & 保存到会话 ====== */
+function applyVoicePreset (id) {
+  const p = voicePresets.find(x => x.id === id)
+  if (p) {
+    chat.settings.ttsStyle = p.ttsStyle
+    chat.settings.emoWeight = p.emoWeight
+  }
 }
 
-async function onAudioDone(wav){
-  const transcript = await asrFull(wav)
-  chat.addMessage({ role:'user', content: transcript, ts: Date.now(), audioUrl: URL.createObjectURL(wav) })
-  await converse(transcript)
-}
-function useQuestion(q){ text.value = q }
+watch(selectedVoicePreset, (v) => {
+  applyVoicePreset(v)
+  if (chatId.value) {
+    saveSession(chatId.value, {
+      messages: chat.messages,
+      meta: { voicePreset: v }
+    })
+  }
+})
 
-async function sendText(){
-  if(!text.value.trim()) return
-  const userText = text.value.trim()
-  chat.addMessage({ role:'user', content: userText, ts: Date.now() })
-  text.value = ''
-  await converse(userText)
+/* ====== TTS 清洗 ====== */
+function cleanTextForTTS (raw) {
+  if (!raw) return ''
+  let t = String(raw)
+  // 去掉深度问题段
+  t = t.replace(/\[DEEP_QUESTIONS[\s\S]*$/i, '')
+  // 去掉 markdown 代码块
+  t = t.replace(/```[\s\S]*?```/g, '')
+  // 去掉行级标记
+  t = t.replace(/^[-*+#>\s]+/gm, '')
+  // 合并空白
+  t = t.replace(/\s+/g, ' ')
+  return t.trim()
 }
 
-/* TTS：生成 WAV；根据开关决定是否自动播，默认仅挂URL由用户选择播放 */
-async function doTTS(text, msgIndex){
+async function doTTS (text, msgIndex) {
+  text = cleanTextForTTS(text)
   if (!text) return
   try {
     const res = await synthesizeTTS({
@@ -177,15 +217,15 @@ async function doTTS(text, msgIndex){
 
     if (chat.messages[msgIndex]) {
       chat.messages[msgIndex].audioUrl = url
-      if (settings.voiceEnabled) play(chat.messages[msgIndex])  // 自动播放可开关
+      if (settings.voiceEnabled) play(chat.messages[msgIndex])
     }
   } catch (e) {
     console.warn('TTS 失败：', e)
-    chat.addMessage({ role:'assistant', content:`【系统】TTS失败：${e.message}`, ts: Date.now() })
+    chat.addMessage({ role: 'assistant', content: `【系统】TTS失败：${e.message}`, ts: Date.now() })
   }
 }
 
-async function converse(userText) {
+async function converse (userText) {
   chat.pending = true
   try {
     const system = buildSystemPrompt({
@@ -196,14 +236,23 @@ async function converse(userText) {
     const sysWithKB = chat.kbContext ? system + `\n\n【外部上下文，供参考】\n` + chat.kbContext : system
 
     let msgs = []
+    // ③ 登录后，同一会话第二次开始带上下文
     if (user.isLogin) {
-      msgs = [{ role:'system', content: sysWithKB }]
-      for (const m of chat.messages) {
-        if (m.role==='user' || m.role==='assistant') msgs.push({ role:m.role, content:m.content })
+      const userMsgCount = chat.messages.filter(m => m.role === 'user').length
+      if (userMsgCount >= 1) {
+        msgs = [{ role: 'system', content: sysWithKB }]
+        for (const m of chat.messages) {
+          if (m.role === 'user' || m.role === 'assistant') {
+            msgs.push({ role: m.role, content: m.content })
+          }
+        }
+        msgs.push({ role: 'user', content: userText })
+      } else {
+        // 第一次提问：不带历史
+        msgs = [{ role: 'system', content: sysWithKB }, { role: 'user', content: userText }]
       }
-      msgs.push({ role:'user', content:userText })
     } else {
-      msgs = [{ role:'system', content: sysWithKB }, { role:'user', content:userText }]
+      msgs = [{ role: 'system', content: sysWithKB }, { role: 'user', content: userText }]
     }
 
     let full = ''
@@ -214,7 +263,7 @@ async function converse(userText) {
         messages: msgs,
         onDelta: (delta) => {
           if (!full) {
-            chat.addMessage({ role:'assistant', content: delta, ts: Date.now() })
+            chat.addMessage({ role: 'assistant', content: delta, ts: Date.now() })
             full = delta
             aiIndex = chat.messages.length - 1
           } else {
@@ -224,94 +273,139 @@ async function converse(userText) {
         },
         onDone: async () => {
           if (aiIndex >= 0) await doTTS(full, aiIndex)
-          save()  // 本地保存
+          save()
         }
       })
     } else {
       const content = await chatOnce(msgs)
-      chat.addMessage({ role:'assistant', content, ts: Date.now() })
+      chat.addMessage({ role: 'assistant', content, ts: Date.now() })
       full = content
       const idx = chat.messages.length - 1
       await doTTS(full, idx)
       save()
     }
 
+    // 解析深度问题
     const qs = parseDeepQuestions(full)
     chat.setDeepQuestions(qs)
-
   } catch (e) {
-    chat.addMessage({ role:'assistant', content: '【系统】对话失败：' + e.message, ts: Date.now() })
+    chat.addMessage({ role: 'assistant', content: '【系统】对话失败：' + e.message, ts: Date.now() })
   } finally {
     chat.pending = false
   }
 }
 
-/* ============ 本地会话缓存：新建 / 删除 / 切换 / 自动保存（原地替换防止响应式引用丢失） ============ */
+/* 语音识别 → 填到输入框 */
+async function useASR (blob) {
+  try {
+    const txt = await asrFull(blob)
+    text.value = txt
+    if (autoSendASR.value && txt && txt.trim()) await send()
+  } catch (e) {
+    console.warn('ASR失败', e)
+  }
+}
+
+/* 深度问题按钮注入 */
+function useQuestion (q) {
+  text.value = q
+}
+
+function parseDeepQuestions (content) {
+  if (!content) return []
+  const m = content.match(/\[DEEP_QUESTIONS\]([\s\S]*?)\[END\]/)
+  if (!m) return []
+  return m[1].split('\n').map(s => s.trim()).filter(Boolean)
+}
+
+/* ============ 多会话本地缓存 ============ */
 const chatList = ref(listChats())
 const chatId = ref(chatList.value[0]?.id || '')
 
-// 初始化：加载当前会话消息（原地写入）
 onMounted(() => {
   if (!chatId.value) {
     const c = createSession(role.value?.name ? `${role.value.name} 的会话` : '新会话')
     chatList.value = listChats()
     chatId.value = c.id
   }
-  const initMsgs = loadSession(chatId.value) || []
-  chat.messages.splice(0, chat.messages.length, ...initMsgs)   // ✅ 原地替换
+  const initData = loadSession(chatId.value) || { messages: [], meta: {} }
+  chat.messages.splice(0, chat.messages.length, ...initData.messages)
+  selectedVoicePreset.value = initData.meta?.voicePreset || 'neutral'
+  applyVoicePreset(selectedVoicePreset.value)
 })
 
-// 切换会话：原地替换
 watch(chatId, (id) => {
   if (!id) return
-  const msgs = loadSession(id) || []
-  chat.messages.splice(0, chat.messages.length, ...msgs)       // ✅ 原地替换
+  const data = loadSession(id) || { messages: [], meta: {} }
+  chat.messages.splice(0, chat.messages.length, ...data.messages)
+  selectedVoicePreset.value = data.meta?.voicePreset || 'neutral'
+  applyVoicePreset(selectedVoicePreset.value)
 })
 
-// 自动保存（防抖）；建议 chatCache 仅保存 {role,content,ts}，不要持久化 audioUrl
-let autosaveTimer = null
-watch(() => chat.messages, (val) => {
-  clearTimeout(autosaveTimer)
-  autosaveTimer = setTimeout(() => {
-    if (chatId.value) saveSession(chatId.value, val)
-  }, 600)
-}, { deep: true })
-
-function newChat(){
+function newChat () {
   const c = createSession(role.value?.name ? `${role.value.name} 的会话` : '新会话')
   chatList.value = listChats()
   chatId.value = c.id
-  chat.messages.splice(0, chat.messages.length)                 // 清空当前显示
+  chat.clear()
+  // 重置成默认音色
+  selectedVoicePreset.value = 'neutral'
+  applyVoicePreset('neutral')
 }
-function removeChat(){
+function removeChat () {
   if (!chatId.value) return
-  if (!confirm('确定删除当前会话？此操作不可恢复。')) return
-  const id = chatId.value
-  deleteSession(id)
+  deleteSession(chatId.value)
   chatList.value = listChats()
   chatId.value = chatList.value[0]?.id || ''
-  const msgs = chatId.value ? (loadSession(chatId.value) || []) : []
-  chat.messages.splice(0, chat.messages.length, ...msgs)        // ✅
+  const data = chatId.value ? loadSession(chatId.value) : { messages: [], meta: {} }
+  chat.messages.splice(0, chat.messages.length, ...(data.messages || []))
+  selectedVoicePreset.value = data.meta?.voicePreset || 'neutral'
+  applyVoicePreset(selectedVoicePreset.value)
 }
-function save(){
-  if (chatId.value) saveSession(chatId.value, chat.messages)
+function save () {
+  if (chatId.value) {
+    saveSession(chatId.value, {
+      messages: chat.messages,
+      meta: { voicePreset: selectedVoicePreset.value }
+    })
+  }
   console.info('已保存到本地：', chatId.value)
 }
-/* ================================================================================================= */
 
-function exportChat(){
+function exportChat () {
   const payload = { role: role.value, messages: chat.messages, ts: Date.now() }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' })
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = url; a.download = `chat-${role.value.id}-${Date.now()}.json`
+  a.href = url
+  a.download = `chat-${role.value.id}-${Date.now()}.json`
   a.click()
   URL.revokeObjectURL(url)
 }
 
-function toggleVoice(){ chat.settings.voiceEnabled = !chat.settings.voiceEnabled }
+function toggleVoice () { chat.settings.voiceEnabled = !chat.settings.voiceEnabled }
+
+async function send () {
+  const v = text.value.trim()
+  if (!v) return
+  chat.addMessage({ role: 'user', content: v, ts: Date.now() })
+  text.value = ''
+  await converse(v)
+}
 </script>
 
 <style scoped>
-/* Markdown 外观在 MessageBubble 内部 .content 中已有基础样式 */
+.chat-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+}
+.chat-input {
+  margin-top: 10px;
+}
 </style>

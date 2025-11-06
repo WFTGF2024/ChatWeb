@@ -38,7 +38,6 @@ const f = reactive({
 async function submit(){
   try{
     await register(f)
-    alert('注册成功，请登录')
     router.push('/login')
   }catch(e){
     alert('注册失败：' + (e.response?.data?.message || e.message))
