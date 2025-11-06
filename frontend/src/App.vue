@@ -54,7 +54,7 @@ import KnowledgePanel from './components/KnowledgePanel.vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from './store/chat'
 const router = useRouter()
-const appName = import.meta.env.VITE_APP_NAME || 'AI 角色扮演'
+const appName = import.meta.env.VITE_APP_NAME || '软件设计实践周项目'
 const chat = useChatStore()
 
 function onSelectRole(role){

@@ -71,3 +71,13 @@ mysql:
 app_log_file: logs/app.log
 server_port: 8080
 ```
+
+
+# 推荐
+$env:GOPROXY = "https://goproxy.cn,direct"
+export GOPROXY="https://goproxy.cn,direct"
+# 可选再关掉 sumdb（有时候也连不上）
+$env:GONOSUMDB = "github.com"
+
+
+npm install markdown-it
