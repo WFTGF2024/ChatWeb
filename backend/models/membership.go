@@ -40,13 +40,14 @@ type MembershipResponse struct {
 
 // MembershipOrder 会员订单模型
 type MembershipOrder struct {
-	OrderID         uint      `json:"order_id" gorm:"primaryKey"`
-	UserID          uint      `json:"user_id" gorm:"not null"`
-	PurchaseDate    time.Time `json:"purchase_date"`
-	DurationMonths  int       `json:"duration_months" gorm:"not null"`
-	Amount          float64   `json:"amount" gorm:"type:decimal(10,2);not null"`
-	PaymentMethod   string    `json:"payment_method" gorm:"type:enum('alipay','wechat','card','other');default:'other'"`
-	CreatedAt       time.Time `json:"created_at"`
+	OrderID uint `json:"order_id" gorm:"primaryKey"`
+	//这里卡了很久很久，不加type:int unsigned它会给你自动变成bigint，导致外键关联失败
+	UserID         uint      `json:"user_id" gorm:"not null;type:int unsigned"`
+	PurchaseDate   time.Time `json:"purchase_date"`
+	DurationMonths int       `json:"duration_months" gorm:"not null"`
+	Amount         float64   `json:"amount" gorm:"type:decimal(10,2);not null"`
+	PaymentMethod  string    `json:"payment_method" gorm:"type:enum('alipay','wechat','card','other');default:'other'"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // CreateOrderRequest 创建订单请求
@@ -54,7 +55,7 @@ type CreateOrderRequest struct {
 	UserID         uint    `json:"user_id" binding:"required"`
 	DurationMonths int     `json:"duration_months" binding:"required"`
 	Amount         float64 `json:"amount" binding:"required"`
-	PaymentMethod string  `json:"payment_method" binding:"required"`
+	PaymentMethod  string  `json:"payment_method" binding:"required"`
 }
 
 // OrderResponse 订单响应

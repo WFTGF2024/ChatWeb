@@ -27,25 +27,3 @@ backend/
 [curl命令请点击这个](./curl.md)
 [curl命令及结果点击这个](./curl_and_response.md)
 
-# 运行项目
-
-1. 安装 `Go>1.20`,并把Go应用的bin文件夹的绝对路径加入到你的系统Path中
-2. 确保 `MySQL` 数据库已启动并创建 `Qiniu_Project` 数据库
-3. 根据实际情况修改 `config.yaml` 中的数据库连接信息和服务器设置
-在 `backend`目录运行以下命令
-```bash
-go mod init backend
-go mod tidy
-go run main.go -r ./config.yaml
-```
-config.yaml若未给出，可以按下列格式新建给出：
-```yaml
-mysql:
-  host: localhost
-  port: 3306
-  user: root
-  password: yourpassword
-  database: Qiniu_Project
-app_log_file: logs/app.log
-server_port: 8080
-```

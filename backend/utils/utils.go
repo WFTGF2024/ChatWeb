@@ -2,13 +2,14 @@ package utils
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
-	"golang.org/x/crypto/bcrypt"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // JWTSecret JWT密钥
@@ -32,7 +33,7 @@ func HashPassword(password string) (string, error) {
 func CheckPassword(password, hash string) bool {
 	log.WithFields(log.Fields{
 		"passwordLength": len(password),
-		"hashLength":    len(hash),
+		"hashLength":     len(hash),
 	}).Debug("开始密码验证")
 
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
@@ -109,4 +110,33 @@ func GenerateResetToken() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+// GenerateRandomString 生成指定长度的随机字符串
+func GenerateRandomString(length int) string {
+	// 计算需要的字节数（base64编码会使长度增加约1/3）
+	byteLength := (length * 3) / 4
+	if (length*3)%4 != 0 {
+		byteLength++
+	}
+
+	// 生成随机字节
+	b := make([]byte, byteLength)
+	if _, err := rand.Read(b); err != nil {
+		// 如果加密随机数生成失败，使用备用方案
+		return generateFallbackRandomString(length)
+	}
+
+	// 使用base64编码并截取到指定长度
+	return base64.URLEncoding.EncodeToString(b)[:length]
+}
+
+// generateFallbackRandomString 备用随机字符串生成器
+func generateFallbackRandomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[i%len(charset)]
+	}
+	return string(b)
 }

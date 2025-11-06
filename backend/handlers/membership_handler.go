@@ -289,3 +289,19 @@ func GetRecentOrders(c *gin.Context) {
 	}).Info("成功获取最近N条订单")
 	c.JSON(http.StatusOK, orders)
 }
+
+// GetMemberships 获取会员列表
+func GetMemberships(c *gin.Context) {
+	log.Info("开始处理获取会员列表请求")
+
+	// 调用会员服务获取会员列表
+	memberships, err := membershipService.GetAllMemberships()
+	if err != nil {
+		log.WithError(err).Error("获取会员列表失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	log.WithField("count", len(memberships)).Info("成功获取会员列表")
+	c.JSON(http.StatusOK, memberships)
+}

@@ -43,12 +43,12 @@ func (s *membershipService) GetMembershipInfo(userID uint) (*models.MembershipRe
 		return nil, errors.New("会员信息不存在")
 	}
 
-	// 构建响应
+	// 构建响应，直接使用字符串日期
 	membershipResp := models.MembershipResponse{
 		MembershipID: membership.MembershipID,
 		UserID:       membership.UserID,
-		StartDate:    membership.StartDate,
-		ExpireDate:   membership.ExpireDate,
+		StartDate:    membership.StartDate,  // 直接使用字符串
+		ExpireDate:   membership.ExpireDate, // 直接使用字符串
 		Status:       membership.Status,
 	}
 
@@ -67,17 +67,21 @@ func (s *membershipService) GetAllMemberships() ([]models.MembershipResponse, er
 		return nil, errors.New("查询会员信息失败")
 	}
 
+	// 如果没有会员信息，返回空数组而不是nil
+	if len(memberships) == 0 {
+		return []models.MembershipResponse{}, nil
+	}
+
 	// 构建响应
-	var responses []models.MembershipResponse
-	for _, membership := range memberships {
-		resp := models.MembershipResponse{
+	responses := make([]models.MembershipResponse, len(memberships))
+	for i, membership := range memberships {
+		responses[i] = models.MembershipResponse{
 			MembershipID: membership.MembershipID,
 			UserID:       membership.UserID,
 			StartDate:    membership.StartDate,
 			ExpireDate:   membership.ExpireDate,
 			Status:       membership.Status,
 		}
-		responses = append(responses, resp)
 	}
 
 	log.Info("获取所有会员信息成功")
@@ -108,11 +112,11 @@ func (s *membershipService) CreateMembership(req models.CreateMembershipRequest)
 		return nil, errors.New("用户已有会员信息")
 	}
 
-	// 创建新会员信息
+	// 创建新会员信息，直接使用字符串日期
 	newMembership := models.MembershipInfo{
 		UserID:     req.UserID,
-		StartDate:  req.StartDate,
-		ExpireDate: req.ExpireDate,
+		StartDate:  req.StartDate,  // 直接使用字符串
+		ExpireDate: req.ExpireDate, // 直接使用字符串
 		Status:     req.Status,
 	}
 
@@ -122,12 +126,12 @@ func (s *membershipService) CreateMembership(req models.CreateMembershipRequest)
 		return nil, errors.New("创建会员信息失败")
 	}
 
-	// 构建响应
+	// 构建响应，直接使用字符串日期
 	membershipResp := models.MembershipResponse{
 		MembershipID: newMembership.MembershipID,
 		UserID:       newMembership.UserID,
-		StartDate:    newMembership.StartDate,
-		ExpireDate:   newMembership.ExpireDate,
+		StartDate:    newMembership.StartDate,  // 直接使用字符串
+		ExpireDate:   newMembership.ExpireDate, // 直接使用字符串
 		Status:       newMembership.Status,
 	}
 

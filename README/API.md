@@ -5,9 +5,7 @@
 - **TTS**:7206
 - **LLM**:7207
 - **VL**:7208
-- **Web Search**:5080 (需要先部署容器才能部署)
-- **File Server**:7201
-- **basic backen**:7210
+- **backend**:5000
 
 ## 容器部署端口
 - **postgreSQL**:5432

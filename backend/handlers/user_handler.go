@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"backend/database"
 	"backend/models"
 	"backend/services"
 	"backend/utils"
@@ -70,7 +71,7 @@ func Login(c *gin.Context) {
 	}
 
 	// 计算令牌过期时间
-	expireAt := time.Now().Add(time.Hour * 24).Format(time.RFC3339)
+	expireAt := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 
 	log.WithField("username", req.Username).Info("用户登录成功")
 
@@ -188,11 +189,12 @@ func VerifySecurity(c *gin.Context) {
 
 	log.WithField("username", req.Username).Debug("验证密保问题请求参数")
 
-	// 调用用户服务验证密保问题
+	// 1. 调用用户服务验证密保问题（这一步只是判断答案对不对）
 	valid, err := userService.VerifySecurity(req)
 	if err != nil {
 		log.WithError(err).Error("验证密保问题失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "验证失败"})
+		// 基本是业务错误，比如用户不存在
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
@@ -202,17 +204,33 @@ func VerifySecurity(c *gin.Context) {
 		return
 	}
 
-	// 生成重置令牌
+	// 2. 答案正确，生成重置令牌
 	resetToken := utils.GenerateResetToken()
+	expiresAt := time.Now().Add(15 * time.Minute)
 
-	// 在实际应用中，应该将重置令牌存储到数据库中，并设置过期时间
-	// 这里简化处理，直接返回令牌
+	// 3. 把令牌写回这个用户，跟 ResetPassword 的查法对上
+	var user models.User
+	if err := database.DB.Where("username = ?", req.Username).First(&user).Error; err != nil {
+		log.WithError(err).Error("密保验证成功但查询用户失败")
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "用户不存在"})
+		return
+	}
+
+	if err := database.DB.Model(&user).Updates(map[string]interface{}{
+		"reset_token":            resetToken,
+		"reset_token_expires_at": expiresAt,
+	}).Error; err != nil {
+		log.WithError(err).Error("保存重置令牌失败")
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "保存重置令牌失败"})
+		return
+	}
 
 	log.WithFields(log.Fields{
 		"username":   req.Username,
 		"resetToken": resetToken,
-	}).Info("密保问题验证成功")
+	}).Info("密保问题验证成功并生成重置令牌")
 
+	// 4. 返回给前端 / pytest
 	c.JSON(http.StatusOK, gin.H{
 		"success":     true,
 		"reset_token": resetToken,
@@ -226,19 +244,36 @@ func ResetPassword(c *gin.Context) {
 	var req models.ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.WithError(err).Error("解析重置密码请求失败")
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "参数错误",
+		})
 		return
 	}
 
 	log.WithField("resetToken", req.ResetToken).Debug("重置密码请求参数")
 
-	// 在实际应用中，应该验证reset_token是否有效且未过期
-	// 这里简化处理，假设令牌有效
-
 	// 调用用户服务重置密码
-	if err := userService.ResetPassword(req); err != nil {
-		log.WithError(err).Error("密码重置失败")
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "密码重置失败"})
+	err := userService.ResetPassword(req)
+	if err != nil {
+		msg := err.Error()
+		switch msg {
+		case "无效的重置令牌", "重置令牌已过期":
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": msg,
+			})
+		case "密码处理失败", "更新密码失败":
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "密码重置失败",
+			})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "服务器内部错误",
+			})
+		}
 		return
 	}
 

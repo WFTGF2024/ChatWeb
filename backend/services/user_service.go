@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"time"
 
 	"backend/database"
 	"backend/models"
@@ -254,7 +255,6 @@ func (s *userService) VerifySecurity(req models.SecurityVerifyRequest) (bool, er
 	// 验证安全问题答案
 	answer1Valid := utils.CheckPassword(req.SecurityAnswer1, user.SecurityAnswer1Hash)
 	answer2Valid := utils.CheckPassword(req.SecurityAnswer2, user.SecurityAnswer2Hash)
-
 	if !answer1Valid || !answer2Valid {
 		log.Warn("安全问题验证失败")
 		return false, nil
@@ -269,8 +269,17 @@ func (s *userService) ResetPassword(req models.ResetPasswordRequest) error {
 	log.Info("开始重置密码")
 	log.WithField("resetToken", req.ResetToken).Debug("重置密码请求参数")
 
-	// 在实际应用中，这里应该先验证resetToken的有效性
-	// 为简化示例，我们假设resetToken是有效的，并直接更新密码
+	// 首先通过reset_token查找用户
+	var user models.User
+	if err := database.DB.Where("reset_token = ?", req.ResetToken).First(&user).Error; err != nil {
+		log.WithError(err).Error("无效的重置令牌")
+		return errors.New("无效的重置令牌")
+	}
+
+	// 检查令牌是否过期
+	if user.ResetTokenExpiresAt != nil && time.Now().After(*user.ResetTokenExpiresAt) {
+		return errors.New("重置令牌已过期")
+	}
 
 	// 哈希新密码
 	passwordHash, err := utils.HashPassword(req.NewPassword)
@@ -279,20 +288,47 @@ func (s *userService) ResetPassword(req models.ResetPasswordRequest) error {
 		return errors.New("密码处理失败")
 	}
 
-	// 更新密码
-	// 注意：在实际应用中，这里应该通过resetToken找到对应的用户
-	// 为简化示例，我们假设重置令牌是有效的
-	result := database.DB.Model(&models.User{}).Update("password_hash", passwordHash)
+	// 更新密码并清除重置令牌
+	result := database.DB.Model(&user).Updates(map[string]interface{}{
+		"password_hash":          passwordHash,
+		"reset_token":            nil,
+		"reset_token_expires_at": nil,
+	})
+
 	if result.Error != nil {
 		log.WithError(result.Error).Error("更新密码失败")
 		return errors.New("更新密码失败")
 	}
 
-	if result.RowsAffected == 0 {
-		log.Warn("未找到要更新的用户")
-		return errors.New("重置密码失败")
-	}
-
 	log.Info("重置密码成功")
 	return nil
+}
+
+// GenerateResetToken 生成重置令牌
+func (s *userService) GenerateResetToken(username string) (string, error) {
+	log.Info("开始生成重置令牌")
+	log.WithField("username", username).Debug("生成重置令牌请求参数")
+
+	// 查找用户
+	var user models.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		log.WithError(err).Warn("用户不存在")
+		return "", errors.New("用户不存在")
+	}
+
+	// 生成重置令牌
+	resetToken := utils.GenerateRandomString(32)
+	expiresAt := time.Now().Add(24 * time.Hour) // 令牌24小时后过期
+
+	// 保存重置令牌
+	if err := database.DB.Model(&user).Updates(map[string]interface{}{
+		"reset_token":            resetToken,
+		"reset_token_expires_at": expiresAt,
+	}).Error; err != nil {
+		log.WithError(err).Error("保存重置令牌失败")
+		return "", errors.New("生成重置令牌失败")
+	}
+
+	log.WithField("username", username).Info("生成重置令牌成功")
+	return resetToken, nil
 }
