@@ -12,6 +12,7 @@ import (
 	"backend/database"
 	"backend/handlers"
 	"backend/middleware"
+	"backend/models"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
@@ -48,9 +49,19 @@ func setupRouter() *gin.Engine {
 
 	// Web路由组
 	web := r.Group("/web")
+	web.Use(middleware.JWTAuthMiddleware())   // ← 加上这一行
 	{
+		web.POST("/search", handlers.HandleWebSearch)
+		web.GET("/page/:id", handlers.HandleGetPage)
+
+		web.GET("/items", handlers.ListPages)
+		web.POST("/items", handlers.CreatePage)
+		web.PUT("/items/:id", handlers.UpdatePage)
+		web.DELETE("/items/:id", handlers.DeletePage)
+
+		// 兼容你之前的两个占位接口（只注册一次，避免 panic）
 		web.POST("/ingest", handlers.HandleWebIngest)
-		web.POST("/chunk", handlers.HandleWebChunk)
+		web.POST("/chunk",  handlers.HandleWebChunk)
 	}
 
 	// Chat路由组
@@ -125,6 +136,8 @@ func setupRouter() *gin.Engine {
 		orders.GET("/:user_id/recent", handlers.GetRecentOrders)
 	}
 
+
+
 	return r
 }
 
@@ -190,7 +203,10 @@ func main() {
 	// 2. 初始化数据库连接
 	log.Info("初始化数据库连接...")
 	database.InitDB()
-
+	// 自动迁移（确保加上 UserID 与唯一索引）
+	if err := database.DB.AutoMigrate(&models.WebPage{}, &models.ContentChunk{}); err != nil {
+		log.WithError(err).Fatal("AutoMigrate failed")
+	}
 	// 3. 设置路由
 	log.Info("设置HTTP路由...")
 	router := setupRouter()
