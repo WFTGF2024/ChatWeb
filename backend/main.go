@@ -66,9 +66,11 @@ func setupRouter() *gin.Engine {
 
 	// Chat路由组
 	chat := r.Group("/chat")
+	chat.Use(middleware.JWTAuthMiddleware())
 	{
-		chat.GET("/history", handlers.HandleChatHistory)
-		chat.POST("/file-bridge", handlers.HandleFileServerBridge)
+		chat.POST("/sessions", handlers.HandleCreateSession)
+		chat.GET("/sessions/:session_id/messages", handlers.HandleGetSessionMessages)
+		chat.POST("/messages", handlers.HandleSaveMessage)
 	}
 
 	// 认证相关路由
@@ -103,6 +105,7 @@ func setupRouter() *gin.Engine {
 
 	// 会员管理路由
 	membership := api.Group("/membership")
+	membership.Use(middleware.JWTAuthMiddleware())
 	{
 		// 查询会员信息
 		membership.GET("/:user_id", handlers.GetMembershipInfo)
@@ -122,6 +125,7 @@ func setupRouter() *gin.Engine {
 
 	// 会员订单管理路由
 	orders := api.Group("/membership/orders")
+	orders.Use(middleware.JWTAuthMiddleware())
 	{
 		// 查询会员订单记录
 		orders.GET("/:user_id", handlers.GetMembershipOrders)
