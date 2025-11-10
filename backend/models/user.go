@@ -69,3 +69,25 @@ type ResetPasswordRequest struct {
 	ResetToken  string `json:"reset_token" binding:"required"`
 	NewPassword string `json:"new_password" binding:"required"`
 }
+
+type UserActionLog struct {
+    ID           uint      `json:"id" gorm:"primaryKey"`
+    UserID       uint      `json:"user_id" gorm:"not null"`
+    ActionType   string    `json:"action_type" gorm:"not null"`
+    ResourceType string    `json:"resource_type" gorm:"not null"`
+    ResourceID   string    `json:"resource_id" gorm:"not null"`
+    RequestID    string    `json:"request_id"`
+    IPAddr       string    `json:"ip_addr"`
+    UserAgent    string    `json:"user_agent" gorm:"type:varchar(512)"`
+    ExtraJSON    string    `json:"extra_json" gorm:"type:json"`
+    CreatedAt    time.Time `json:"created_at"`
+}
+
+type PasswordResetToken struct {
+    ID        uint      `json:"id" gorm:"primaryKey"`
+    UserID    uint      `json:"user_id" gorm:"not null"`
+    Token     string    `json:"token" gorm:"unique;not null"`
+    ExpireAt  time.Time `json:"expire_at" gorm:"not null"`
+    Used      bool      `json:"used" gorm:"default:false"`
+    CreatedAt time.Time `json:"created_at"`
+}
