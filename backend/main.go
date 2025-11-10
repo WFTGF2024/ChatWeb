@@ -47,9 +47,9 @@ func setupRouter() *gin.Engine {
 	// 创建API路由组
 	api := r.Group("/api")
 
-	// Web路由组
+	// Web路由组（受 JWT 保护）
 	web := r.Group("/web")
-	web.Use(middleware.JWTAuthMiddleware())   // ← 加上这一行
+	web.Use(middleware.JWTAuthMiddleware())
 	{
 		web.POST("/search", handlers.HandleWebSearch)
 		web.GET("/page/:id", handlers.HandleGetPage)
@@ -61,16 +61,27 @@ func setupRouter() *gin.Engine {
 
 		// 兼容你之前的两个占位接口（只注册一次，避免 panic）
 		web.POST("/ingest", handlers.HandleWebIngest)
-		web.POST("/chunk",  handlers.HandleWebChunk)
+		web.POST("/chunk", handlers.HandleWebChunk)
 	}
 
-	// Chat路由组
+	// Chat路由组（受 JWT 保护）——仅在原基础上补齐缺失的路由
 	chat := r.Group("/chat")
 	chat.Use(middleware.JWTAuthMiddleware())
 	{
+		// 已有
 		chat.POST("/sessions", handlers.HandleCreateSession)
 		chat.GET("/sessions/:session_id/messages", handlers.HandleGetSessionMessages)
-		chat.POST("/messages", handlers.HandleSaveMessage)
+		chat.POST("/messages", handlers.HandleSaveMessage) // JSON 内带 {session_id, role?, content}
+
+		// 新增：列出我的会话，便于前端获取 session_id 列表
+		chat.GET("/sessions", handlers.HandleListSessions)
+
+		// 新增：按路径会话追加消息（与 /chat/messages 二选一皆可用）
+		chat.POST("/sessions/:session_id/messages", handlers.HandleAddMessage)
+
+		// 新增：基于上下文与 LLM 对话（一次性/流式）
+		chat.POST("/sessions/:session_id/complete", handlers.HandleLLMCompleteOnce)
+		chat.POST("/sessions/:session_id/stream", handlers.HandleLLMStream)
 	}
 
 	// 认证相关路由
@@ -103,7 +114,7 @@ func setupRouter() *gin.Engine {
 		users.DELETE("/:user_id", handlers.DeleteUser)
 	}
 
-	// 会员管理路由
+	// 会员管理路由（需要认证）
 	membership := api.Group("/membership")
 	membership.Use(middleware.JWTAuthMiddleware())
 	{
@@ -123,7 +134,7 @@ func setupRouter() *gin.Engine {
 		membership.DELETE("/:membership_id", handlers.DeleteMembership)
 	}
 
-	// 会员订单管理路由
+	// 会员订单管理路由（需要认证）
 	orders := api.Group("/membership/orders")
 	orders.Use(middleware.JWTAuthMiddleware())
 	{
@@ -139,8 +150,6 @@ func setupRouter() *gin.Engine {
 		// 查询最近N条订单
 		orders.GET("/:user_id/recent", handlers.GetRecentOrders)
 	}
-
-
 
 	return r
 }
@@ -211,6 +220,7 @@ func main() {
 	if err := database.DB.AutoMigrate(&models.WebPage{}, &models.ContentChunk{}); err != nil {
 		log.WithError(err).Fatal("AutoMigrate failed")
 	}
+
 	// 3. 设置路由
 	log.Info("设置HTTP路由...")
 	router := setupRouter()
