@@ -31,21 +31,7 @@ CREATE TABLE `users` (
   UNIQUE KEY `phone_number` (`phone_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- 2) 会话历史（外键列统一为 INT UNSIGNED）
-CREATE TABLE `chat_history` (
-  `chat_id` BIGINT NOT NULL AUTO_INCREMENT,
-  `user_id` INT UNSIGNED NOT NULL,
-  `record_id` VARCHAR(64) NOT NULL,
-  `content_url` VARCHAR(255) NOT NULL,
-  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`chat_id`),
-  UNIQUE KEY `record_id` (`record_id`),
-  KEY `user_id` (`user_id`),
-  CONSTRAINT `chat_history_ibfk_1`
-    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 
 -- 3) 会员信息（已是 INT UNSIGNED，保持不变并补充 ON UPDATE CASCADE 以一致化）
 CREATE TABLE `membership_info` (
@@ -97,37 +83,36 @@ CREATE TABLE `user_action_logs` (
     FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
--- 6) 临时用户文件（外键列改为 INT UNSIGNED）
-CREATE TABLE `user_files` (
-  `file_id` INT NOT NULL AUTO_INCREMENT,
+CREATE TABLE `chat_sessions` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
   `user_id` INT UNSIGNED NOT NULL,
-  `filename` VARCHAR(255) NOT NULL,
-  `filepath` VARCHAR(255) NOT NULL,
-  `size` BIGINT NOT NULL,
-  `uploaded_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`file_id`),
+  `title` VARCHAR(255) NOT NULL,
+  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
   KEY `user_id` (`user_id`),
-  CONSTRAINT `user_files_ibfk_1`
+  CONSTRAINT `chat_sessions_ibfk_1`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE `chat_messages` (
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
+  `user_id` INT UNSIGNED NOT NULL,
+  `session_id` BIGINT NOT NULL,
+  `content` TEXT NOT NULL,
+  `role` ENUM('user','assistant') NOT NULL,
+  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `user_id` (`user_id`),
+  KEY `session_id` (`session_id`),
+  CONSTRAINT `chat_messages_ibfk_1`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `chat_messages_ibfk_2`
+    FOREIGN KEY (`session_id`) REFERENCES `chat_sessions` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- 7) 永久用户文件（原来没有外键且 user_id 为 BIGINT；统一为 INT UNSIGNED 并加外键）
-CREATE TABLE `user_permanent_files` (
-  `file_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `user_id` INT UNSIGNED NOT NULL,
-  `filename` VARCHAR(255) NOT NULL,
-  `filepath` TEXT NOT NULL,
-  `size` BIGINT NOT NULL,
-  `uploaded_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`file_id`),
-  KEY `idx_user` (`user_id`),
-  KEY `idx_time` (`uploaded_at`),
-  CONSTRAINT `user_permanent_files_ibfk_1`
-    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `password_reset_tokens` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -143,3 +128,26 @@ CREATE TABLE `password_reset_tokens` (
     FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS web_pages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    url VARCHAR(255) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    content TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_user_url (user_id, url)
+);
+
+-- 创建内容分块表
+CREATE TABLE IF NOT EXISTS content_chunks (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    page_id INT NOT NULL,
+    chunk_index INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (page_id) REFERENCES web_pages(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_page_chunk (page_id, chunk_index)
+);
