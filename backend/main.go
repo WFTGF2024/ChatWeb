@@ -79,6 +79,8 @@ func setupRouter() *gin.Engine {
 		// 新增：按路径会话追加消息（与 /chat/messages 二选一皆可用）
 		chat.POST("/sessions/:session_id/messages", handlers.HandleAddMessage)
 
+		chat.DELETE("/sessions/:session_id", handlers.HandleDeleteSession)
+
 		// 新增：基于上下文与 LLM 对话（一次性/流式）
 		chat.POST("/sessions/:session_id/complete", handlers.HandleLLMCompleteOnce)
 		chat.POST("/sessions/:session_id/stream", handlers.HandleLLMStream)

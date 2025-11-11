@@ -253,3 +253,23 @@ func HandleLLMStream(c *gin.Context) {
 		},
 	)
 }
+
+// DELETE /api/chats/:session_id  删除会话
+func HandleDeleteSession(c *gin.Context) {
+    userID := c.GetUint("user_id")
+    sessionID := c.Param("session_id")
+    
+    if _, err := strconv.ParseUint(sessionID, 10, 64); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+        return
+    }
+
+    // 使用指针调用方法
+    chatService := &services.ChatService{}
+    if err := chatService.DeleteSession(userID, sessionID); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"success": true, "message": "会话已删除"})
+}

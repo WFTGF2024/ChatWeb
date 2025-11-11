@@ -172,3 +172,28 @@ func parseSessionID(s string) (uint, error) {
 	}
 	return uint(u64), nil
 }
+
+// DeleteSession 删除用户的会话及其所有消息
+func (s *ChatService) DeleteSession(userID uint, sessionID string) error {
+    sid, err := parseSessionID(sessionID)
+    if err != nil {
+        return err
+    }
+
+    // 开始事务
+    tx := database.DB.Begin()
+    
+    // 删除会话下的所有消息
+    if err := tx.Where("user_id = ? AND session_id = ?", userID, sid).Delete(&models.ChatMessage{}).Error; err != nil {
+        tx.Rollback()
+        return err
+    }
+
+    // 删除会话
+    if err := tx.Where("user_id = ? AND id = ?", userID, sid).Delete(&models.ChatSession{}).Error; err != nil {
+        tx.Rollback()
+        return err
+    }
+
+    return tx.Commit().Error
+}
