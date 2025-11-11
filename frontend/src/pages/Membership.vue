@@ -30,7 +30,12 @@
 <script setup>
 import { ref } from 'vue'
 import { useUserStore } from '../store/user'
-import { getMembership, listOrders, createOrder } from '../api/core'
+import {
+   getMembershipByUser,
+   createOrder,
+   listOrdersByUser,
+   getLatestOrder
+ } from '../api/membership'
 
 const user = useUserStore()
 const membership = ref(null)

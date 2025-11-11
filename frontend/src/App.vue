@@ -11,6 +11,9 @@
         <!-- 这里把 角色库 去掉了 -->
         <router-link class="btn ghost" to="/membership">会员</router-link>
         <router-link class="btn ghost" to="/web-search">搜索</router-link>
+        <router-link class="btn ghost" to="/asr-tts">ASR/TTS</router-link>
+        <router-link class="btn ghost" to="/login">登录</router-link>
+        <router-link class="btn ghost" to="/register">注册</router-link>
                 <router-link class="btn ghost" to="/profile">账户</router-link>
       </div>
     </header>
@@ -22,9 +25,20 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from './store/user'
+
+const appName = import.meta.env.VITE_APP_NAME ?? 'AI 语音角色平台'  // ← 新增
+
 const router = useRouter()
-const appName = import.meta.env.VITE_APP_NAME || '软件设计实践周项目'
+const userStore = useUserStore()
+const isLogin = computed(() => userStore.isLogin)
+
+function doLogout () {
+  userStore.logout()
+  router.push('/login')
+}
 </script>
 
 <style scoped>

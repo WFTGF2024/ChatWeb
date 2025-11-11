@@ -25,7 +25,7 @@
 </template>
 <script setup>
 import { reactive } from 'vue'
-import { register } from '../api/core'
+import { register } from '../api/auth'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()

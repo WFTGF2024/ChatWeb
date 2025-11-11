@@ -1,47 +1,23 @@
-import { httpLLM } from './http'
+import { httpLLM, readNDJsonStream } from './http'
 
-export async function chatOnce(messages, model=null){
+export async function chat(messages, model){
   const body = { messages }
   if(model) body.model = model
   const { data } = await httpLLM.post('/api/chat', body)
-  return data.content
+  // returns { content, model, raw? }
+  return data
 }
 
-// 流式：逐字回调
-export async function chatStream({ messages, onDelta, onDone }) {
-  const url = new URL('/api/chat/stream', httpLLM.defaults.baseURL).toString()
-
-  // 🚫 不传 model，只传 messages
+export async function chatStream(messages, onDelta, model){
   const body = { messages }
-
-  const resp = await fetch(url, {
+  if(model) body.model = model
+  const resp = await fetch(`${httpLLM.defaults.baseURL}/api/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   })
-
-  if (!resp.body) throw new Error('No stream body')
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder('utf-8')
-  let text = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const chunk = decoder.decode(value, { stream: true })
-    for (const line of chunk.split('\n').filter(Boolean)) {
-      try {
-        const obj = JSON.parse(line)
-        if (obj.delta) {
-          text += obj.delta
-          onDelta && onDelta(obj.delta, text)
-        } else if (obj.event === 'done') {
-          onDone && onDone(text)
-        }
-      } catch (e) {
-        // ignore bad line
-      }
-    }
-  }
-  return text
+  if(!resp.ok) throw new Error('LLM stream failed')
+  await readNDJsonStream(resp, (obj)=>{
+    if(obj.delta) onDelta(obj.delta)
+  })
 }

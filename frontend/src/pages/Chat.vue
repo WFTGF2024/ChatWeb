@@ -1,411 +1,276 @@
 <template>
   <div class="chat-wrap">
-    <ChatHeader :role="role">
-      <div class="row">
-        <!-- 多会话：选择 / 新建 / 删除 -->
-        <select v-model="chatId" class="select" style="margin-right:8px" v-if="chatList.length">
-          <option v-for="c in chatList" :key="c.id" :value="c.id">{{ c.title }}</option>
-        </select>
-        <button class="btn ghost" @click="newChat" title="新建会话">＋新建</button>
-        <button class="btn ghost danger" :disabled="!chatId" @click="removeChat" title="删除当前会话">🗑 删除</button>
+    <ChatHeader :role="role" />
 
-        <!-- ① 角色风格 → 绑定音色 -->
-        <select v-model="selectedVoicePreset" class="select" style="margin-left:8px; max-width:160px;">
-          <option v-for="p in voicePresets" :key="p.id" :value="p.id">{{ p.label }}</option>
-        </select>
-
-        <button class="btn ghost" @click="toggleVoice" title="是否自动播放TTS">
-          {{ settings.voiceEnabled ? '🔊 自动播放开' : '🔇 自动播放关' }}
-        </button>
-        <button class="btn ghost" @click="exportChat">导出</button>
-        <button class="btn" :disabled="!canSave" @click="save">保存</button>
-      </div>
-    </ChatHeader>
-
-    <LoginGate v-if="!isLogin" />
-
-    <div class="chat-list">
-      <MessageBubble
-        v-for="(m,i) in messages"
-        :key="m.ts ?? i"
-        :who="m.role==='user' ? 'user' : 'ai'"
-        :avatar="m.role==='user' ? '👤' : '🤖'"
-      >
-        <template #default>
-          <div v-if="m.role==='assistant'" v-html="toHtml(m.content)"></div>
-          <div v-else>{{ m.content }}</div>
-        </template>
-        <template #extra>
-          <template v-if="m.role==='assistant'">
-            <span v-if="m.audioUrl" style="margin-left:8px; opacity:.8;">WAV已生成</span>
-            <button
-              v-if="m.audioUrl && !isPlaying(m)"
-              class="btn ghost"
-              style="margin-left:8px"
-              @click="play(m)"
-            >▶ 播放</button>
-            <button
-              v-if="m.audioUrl && isPlaying(m)"
-              class="btn ghost"
-              style="margin-left:8px"
-              @click="stop()"
-            >■ 停止</button>
-            <button
-              v-if="m.audioUrl"
-              class="btn ghost"
-              style="margin-left:6px"
-              @click="downloadFromUrl(m.audioUrl, `tts_${m.ts||Date.now()}.wav`)"
-            >⬇️ 下载</button>
-          </template>
-          <a v-if="m.audioUrl" :href="m.audioUrl" target="_blank" style="margin-left:6px;">打开</a>
-        </template>
-      </MessageBubble>
+    <div class="row" style="gap:8px; align-items:center; margin:8px 0;">
+      <label>会话：</label>
+      <select v-model="chatId" class="select" v-if="chatList.length">
+        <option v-for="c in chatList" :key="c.id" :value="c.id">{{ c.title || ('会话 ' + c.id) }}</option>
+      </select>
+      <button class="btn ghost" @click="newChat">＋新建</button>
+      <button class="btn ghost danger" :disabled="!chatId" @click="removeChat">🗑 删除</button>
     </div>
 
-    <DeepQuestionChips :items="deepQuestions" @pick="useQuestion" />
+    <div class="row" style="gap:8px;align-items:center;">
+      <label class="chip"><input type="checkbox" v-model="chat.settings.voiceEnabled"> 语音播报</label>
+      <small class="hint">开启后将自动分段合成并连续播放。</small>
+      <a v-if="mergedAudioUrl" :href="mergedAudioUrl" download="chat_reply.wav" class="btn">下载整段音频</a>
+    </div>
 
-    <div class="chat-input">
-      <textarea
-        v-model="text"
-        class="input"
-        rows="3"
-        placeholder="说点什么……"
-        @keyup.enter.exact.prevent="send()"
-      ></textarea>
-      <div class="row" style="justify-content:space-between; gap:8px; margin-top:6px;">
-        <AudioRecorder @done="useASR" />
-        <label class="row" style="gap:6px; align-items:center;">
-          <input type="checkbox" v-model="autoSendASR" /> 语音识别后自动发送
-        </label>
-        <div class="row" style="gap:6px;">
-          <button class="btn primary" :disabled="pending" @click="send">发送</button>
+    <div class="panel messages" ref="msgBox">
+      <div v-for="(m,idx) in messages" :key="idx" class="msg" :class="m.role === 'assistant' ? 'ai' : 'user'">
+        <div class="bubble">
+          <pre style="white-space:pre-wrap">{{ m.content }}</pre>
+          <div class="row" style="gap:6px; margin-top:6px;" v-if="m.role === 'assistant'">
+            <button class="chip" @click="speak(m.content)">🔊 朗读</button>
+          </div>
         </div>
+      </div>
+      <div v-if="streamingText" class="msg ai">
+        <div class="bubble">{{ streamingText }}</div>
+      </div>
+    </div>
+
+    <div class="panel input-row">
+      <textarea v-model="input" class="input" rows="3" placeholder="输入内容..."></textarea>
+      <div class="row" style="gap:8px; align-items:center;">
+        <AudioRecorder @done="onAudioDone" />
+        <button class="btn primary" :disabled="sending || !input.trim()" @click="send">发送</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted } from 'vue'
+import { ref, watch, onMounted, nextTick, computed } from 'vue'
+import ChatHeader from '../components/ChatHeader.vue'
+import AudioRecorder from '../components/AudioRecorder.vue'
+import { listChats, upsertChatMeta, removeChat as cacheRemove, loadChat, saveChat, getWithCache } from '../utils/chatCache'
+import { createSession, listSessions, removeSession as apiRemove, appendMessage, listMessages } from '../api/core'
+import { chatStream } from '../api/llm'
+import { asr as asrOnce } from '../api/asr'
+import { synthesize } from '../api/tts'
+
+// --- TTS segmented playback & merge ---
+import { mergeWaveBlobs } from '../utils/audio'
+const speaking = ref(false)
+const segments = ref([])  // { text, blob, url }
+const mergedAudioUrl = ref('')
+
+function extractParagraphs(text){
+  // remove code blocks and metadata-like lines
+  let t = text.replace(/```[\s\S]*?```/g, '').replace(/^>.*$/gm, '').replace(/^\s*\*\*.*\*\*\s*$/gm, '')
+  // heuristically keep Chinese/English body, split by blank lines or long lines
+  const paras = t.split(/\n{2,}/).map(s=>s.trim()).filter(s=>s && s.length > 2)
+  // further split very long paragraphs
+  const final = []
+  for(const p of paras){
+    if(p.length <= 220){ final.push(p); continue }
+    // split by punctuation
+    const parts = p.split(/(?<=[。！？.!?])/)
+    let buf = ''
+    for(const part of parts){
+      if((buf + part).length > 220){ final.push(buf.trim()); buf = part }
+      else buf += part
+    }
+    if(buf.trim()) final.push(buf.trim())
+  }
+  return final.slice(0, 24)  // cap to 24 segments to avoid abuse
+}
+
+async function ttsPlaySegments(text, style){
+  speaking.value = true
+  segments.value = []
+  mergedAudioUrl.value = ''
+  const paras = extractParagraphs(text)
+  const blobs = []
+  for(const p of paras){
+    try{
+      const blob = await synthesize({ text: p, style })
+      const url = URL.createObjectURL(blob)
+      segments.value.push({ text: p, blob, url })
+      blobs.append? blobs.append(blob) : blobs.push(blob)
+      // autoplay this segment now
+      await new Promise((resolve)=>{
+        const audio = new Audio(url)
+        audio.onended = resolve
+        audio.onerror = resolve
+        audio.play().catch(()=>resolve())
+      })
+    }catch(e){
+      console.warn('TTS segment failed', e)
+    }
+  }
+  // merge for download
+  try{
+    const merged = await mergeWaveBlobs(blobs)
+    mergedAudioUrl.value = URL.createObjectURL(merged)
+  }catch(e){ console.warn('merge failed', e) }
+  speaking.value = false
+}
+
 import { useChatStore } from '../store/chat'
 import { useUserStore } from '../store/user'
-import { buildSystemPrompt } from '../utils/prompts'
-import { chatStream, chatOnce } from '../api/llm'
-import { asrFull } from '../api/asr'
-import { synthesizeTTS } from '../api/tts'   // 走 /tts 代理
-import AudioRecorder from '../components/AudioRecorder.vue'
-import MessageBubble from '../components/MessageBubble.vue'
-import DeepQuestionChips from '../components/DeepQuestionChips.vue'
-import LoginGate from '../components/LoginGate.vue'
-import ChatHeader from '../components/ChatHeader.vue'
-import MarkdownIt from 'markdown-it'
-import {
-  listChats, createChat as createSession, deleteChat as deleteSession,
-  loadChat as loadSession, saveChat as saveSession, renameChat
-} from '../utils/chatCache'
 
+const role = ref({ name: '默认', avatar: '🧠' })
 const chat = useChatStore()
 const user = useUserStore()
+const chatList = ref([])
+const chatId = ref(null)
+const messages = ref([])
+const input = ref('')
+const sending = ref(false)
+const streamingText = ref('')
 
-const text = ref('')
-const autoSendASR = ref(true)
-
-// ① 角色风格预设：一个风格绑定一个参考音色
-const voicePresets = [
-  { id: 'neutral', label: '通用助手', ttsStyle: 'style1', emoWeight: 0.65 },
-  { id: 'interview', label: '面试官访谈', ttsStyle: 'style2', emoWeight: 0.55 },
-  { id: 'story', label: '故事/角色', ttsStyle: 'style3', emoWeight: 0.8 }
-]
-const selectedVoicePreset = ref('neutral')
-
-const role = computed(() => chat.currentRole)
-const messages = computed(() => chat.messages)
-const deepQuestions = computed(() => chat.deepQuestions)
-const settings = chat.settings
+// 添加登录状态计算属性
 const isLogin = computed(() => user.isLogin)
-const pending = computed(() => chat.pending)
-const canSave = computed(() => chat.messages.length > 0)
 
-/* Markdown 渲染 */
-const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
-const toHtml = (t) => md.render(t || '')
+const msgBox = ref(null)
+function scrollToBottom(){ nextTick(()=>{ if(msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight }) }
 
-/* 简单播放器 */
-const currentAudio = ref(null)
-const currentUrl = ref('')
-function isPlaying (m) {
-  return !!currentAudio.value && currentUrl.value === m.audioUrl && !currentAudio.value.paused
-}
-function play (m) {
-  try {
-    if (!m?.audioUrl) return
-    stop()
-    currentUrl.value = m.audioUrl
-    currentAudio.value = new Audio(m.audioUrl)
-    currentAudio.value.onended = () => { currentAudio.value = null; currentUrl.value = '' }
-    currentAudio.value.play().catch(() => {})
-  } catch {}
-}
-function stop () {
-  try {
-    if (currentAudio.value) {
-      currentAudio.value.pause()
-      currentAudio.value.currentTime = 0
-    }
-  } catch {}
-  currentAudio.value = null
-  currentUrl.value = ''
-}
-function downloadFromUrl (url, filename) {
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename || `tts_${Date.now()}.wav`
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-}
-
-/* ====== 角色风格应用 & 保存到会话 ====== */
-function applyVoicePreset (id) {
-  const p = voicePresets.find(x => x.id === id)
-  if (p) {
-    chat.settings.ttsStyle = p.ttsStyle
-    chat.settings.emoWeight = p.emoWeight
-  }
-}
-
-watch(selectedVoicePreset, (v) => {
-  applyVoicePreset(v)
-  if (chatId.value) {
-    saveSession(chatId.value, {
-      messages: chat.messages,
-      meta: { voicePreset: v }
+async function hydrateSessions(){
+  // cache first
+  chatList.value = listChats()
+  // then pull from DB (10s TTL)
+  if(isLogin.value) {
+    const server = await getWithCache('cache:sessions', 10_000, async ()=>{
+      try{
+        const data = await listSessions()
+        return data
+      }catch{ return [] }
     })
+    if(Array.isArray(server) && server.length){
+      chatList.value = server.map(x => ({ id: x.id, title: x.title }))
+      // update cache metas
+      server.forEach(x => upsertChatMeta({ id: x.id, title: x.title }))
+    }
   }
+  if(!chatId.value && chatList.value.length) chatId.value = chatList.value[0].id
+}
+
+watch(chatId, async (id)=>{
+  if(!id) return
+  // load from cache first
+  const s = loadChat(id)
+  messages.value = s.messages || []
+  // then load from DB if empty and user is logged in
+  if(messages.value.length === 0 && isLogin.value){
+    try{
+      const data = await listMessages(id)
+      if(Array.isArray(data)) messages.value = data
+      saveChat(id, { messages: messages.value })
+    }catch{}
+  }
+  scrollToBottom()
 })
 
-/* ====== TTS 清洗 ====== */
-function cleanTextForTTS (raw) {
-  if (!raw) return ''
-  let t = String(raw)
-  // 去掉深度问题段
-  t = t.replace(/\[DEEP_QUESTIONS[\s\S]*$/i, '')
-  // 去掉 markdown 代码块
-  t = t.replace(/```[\s\S]*?```/g, '')
-  // 去掉行级标记
-  t = t.replace(/^[-*+#>\s]+/gm, '')
-  // 合并空白
-  t = t.replace(/\s+/g, ' ')
-  return t.trim()
-}
-
-async function doTTS (text, msgIndex) {
-  text = cleanTextForTTS(text)
-  if (!text) return
-  try {
-    const res = await synthesizeTTS({
-      text,
-      style: chat.settings.ttsStyle,
-      emoWeight: chat.settings.emoWeight,
-      format: 'wav'
-    })
-    let url = null
-    if (res instanceof Blob) url = URL.createObjectURL(res)
-    else if (res?.url) url = res.url
-    else if (res?.blob) url = URL.createObjectURL(res.blob)
-    if (!url) return
-
-    if (chat.messages[msgIndex]) {
-      chat.messages[msgIndex].audioUrl = url
-      if (settings.voiceEnabled) play(chat.messages[msgIndex])
-    }
-  } catch (e) {
-    console.warn('TTS 失败：', e)
-    chat.addMessage({ role: 'assistant', content: `【系统】TTS失败：${e.message}`, ts: Date.now() })
-  }
-}
-
-async function converse (userText) {
-  chat.pending = true
-  try {
-    const system = buildSystemPrompt({
-      role: role.value,
-      memorySummary: chat.memorySummary,
-      userPrefs: {}
-    })
-    const sysWithKB = chat.kbContext ? system + `\n\n【外部上下文，供参考】\n` + chat.kbContext : system
-
-    let msgs = []
-    // ③ 登录后，同一会话第二次开始带上下文
-    if (user.isLogin) {
-      const userMsgCount = chat.messages.filter(m => m.role === 'user').length
-      if (userMsgCount >= 1) {
-        msgs = [{ role: 'system', content: sysWithKB }]
-        for (const m of chat.messages) {
-          if (m.role === 'user' || m.role === 'assistant') {
-            msgs.push({ role: m.role, content: m.content })
-          }
-        }
-        msgs.push({ role: 'user', content: userText })
-      } else {
-        // 第一次提问：不带历史
-        msgs = [{ role: 'system', content: sysWithKB }, { role: 'user', content: userText }]
-      }
+async function newChat(){
+  try{
+    let data
+    if(isLogin.value) {
+      data = await createSession('新会话')
     } else {
-      msgs = [{ role: 'system', content: sysWithKB }, { role: 'user', content: userText }]
+      data = { id: Date.now(), title: '临时会话' }
     }
-
-    let full = ''
-    let aiIndex = -1
-
-    if (settings.stream) {
-      await chatStream({
-        messages: msgs,
-        onDelta: (delta) => {
-          if (!full) {
-            chat.addMessage({ role: 'assistant', content: delta, ts: Date.now() })
-            full = delta
-            aiIndex = chat.messages.length - 1
-          } else {
-            full += delta
-            chat.messages[aiIndex].content = full
-          }
-        },
-        onDone: async () => {
-          if (aiIndex >= 0) await doTTS(full, aiIndex)
-          save()
-        }
-      })
-    } else {
-      const content = await chatOnce(msgs)
-      chat.addMessage({ role: 'assistant', content, ts: Date.now() })
-      full = content
-      const idx = chat.messages.length - 1
-      await doTTS(full, idx)
-      save()
-    }
-
-    // 解析深度问题
-    const qs = parseDeepQuestions(full)
-    chat.setDeepQuestions(qs)
-  } catch (e) {
-    chat.addMessage({ role: 'assistant', content: '【系统】对话失败：' + e.message, ts: Date.now() })
-  } finally {
-    chat.pending = false
-  }
-}
-
-/* 语音识别 → 填到输入框 */
-async function useASR (blob) {
-  try {
-    const txt = await asrFull(blob)
-    text.value = txt
-    if (autoSendASR.value && txt && txt.trim()) await send()
-  } catch (e) {
-    console.warn('ASR失败', e)
-  }
-}
-
-/* 深度问题按钮注入 */
-function useQuestion (q) {
-  text.value = q
-}
-
-function parseDeepQuestions (content) {
-  if (!content) return []
-  const m = content.match(/\[DEEP_QUESTIONS\]([\s\S]*?)\[END\]/)
-  if (!m) return []
-  return m[1].split('\n').map(s => s.trim()).filter(Boolean)
-}
-
-/* ============ 多会话本地缓存 ============ */
-const chatList = ref(listChats())
-const chatId = ref(chatList.value[0]?.id || '')
-
-onMounted(() => {
-  if (!chatId.value) {
-    const c = createSession(role.value?.name ? `${role.value.name} 的会话` : '新会话')
+    const id = data.id || data.session_id || Date.now()
+    upsertChatMeta({ id, title: data.title || '临时会话' })
     chatList.value = listChats()
-    chatId.value = c.id
+    chatId.value = id
+    messages.value = []
+    saveChat(id, { messages: [] })
+  }catch(e){
+    alert('创建会话失败：' + e?.message)
   }
-  const initData = loadSession(chatId.value) || { messages: [], meta: {} }
-  chat.messages.splice(0, chat.messages.length, ...initData.messages)
-  selectedVoicePreset.value = initData.meta?.voicePreset || 'neutral'
-  applyVoicePreset(selectedVoicePreset.value)
-})
-
-watch(chatId, (id) => {
-  if (!id) return
-  const data = loadSession(id) || { messages: [], meta: {} }
-  chat.messages.splice(0, chat.messages.length, ...data.messages)
-  selectedVoicePreset.value = data.meta?.voicePreset || 'neutral'
-  applyVoicePreset(selectedVoicePreset.value)
-})
-
-function newChat () {
-  const c = createSession(role.value?.name ? `${role.value.name} 的会话` : '新会话')
-  chatList.value = listChats()
-  chatId.value = c.id
-  chat.clear()
-  // 重置成默认音色
-  selectedVoicePreset.value = 'neutral'
-  applyVoicePreset('neutral')
 }
-function removeChat () {
-  if (!chatId.value) return
-  deleteSession(chatId.value)
+
+async function removeChat(){
+  if(!chatId.value) return
+  const id = chatId.value
+  if(isLogin.value) {
+    try{ await apiRemove(id) }catch{ /* ignore */ }
+  }
+  cacheRemove(id)
   chatList.value = listChats()
-  chatId.value = chatList.value[0]?.id || ''
-  const data = chatId.value ? loadSession(chatId.value) : { messages: [], meta: {} }
-  chat.messages.splice(0, chat.messages.length, ...(data.messages || []))
-  selectedVoicePreset.value = data.meta?.voicePreset || 'neutral'
-  applyVoicePreset(selectedVoicePreset.value)
+  chatId.value = chatList.value[0]?.id || null
+  messages.value = chatId.value ? (loadChat(chatId.value).messages) : []
 }
-function save () {
-  if (chatId.value) {
-    saveSession(chatId.value, {
-      messages: chat.messages,
-      meta: { voicePreset: selectedVoicePreset.value }
+
+async function send(){
+  if(!chatId.value) await newChat()
+  const id = chatId.value
+  const userText = input.value.trim()
+  if(!userText) return
+  input.value = ''
+  const userMsg = { role:'user', content: userText }
+  messages.value.push(userMsg)
+  saveChat(id, { messages: messages.value })
+
+  // also persist to DB if logged in
+  if(isLogin.value){ try{ await appendMessage(id, 'user', userText) }catch{} }
+
+  // stream assistant
+  sending.value = true
+  streamingText.value = ''
+  scrollToBottom()
+  try{
+    const payload = isLogin.value ? messages.value : [{ role: 'user', content: userText }]
+    await chatStream(payload, (delta)=>{
+      streamingText.value += delta
+      scrollToBottom()
     })
+    const aiMsg = { role:'assistant', content: streamingText.value }
+    messages.value.push(aiMsg)
+    streamingText.value = ''
+    saveChat(id, { messages: messages.value })
+    if(chat.settings.voiceEnabled){ try{ await ttsPlaySegments(aiMsg.content, chat.settings.ttsStyle || 'style2') }catch(e){ console.warn(e) } }(id, { messages: messages.value })
+    if(isLogin.value){ try{ await appendMessage(id, 'assistant', aiMsg.content) }catch{} }
+  }catch(e){
+    alert('LLM 生成失败：' + e?.message)
+  }finally{
+    sending.value = false
+    scrollToBottom()
   }
-  console.info('已保存到本地：', chatId.value)
 }
 
-function exportChat () {
-  const payload = { role: role.value, messages: chat.messages, ts: Date.now() }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `chat-${role.value.id}-${Date.now()}.json`
-  a.click()
-  URL.revokeObjectURL(url)
+async function onAudioDone(file){
+  try{
+    const data = await asrOnce(file)
+    const text = data?.text || ''
+    if(text) input.value = (input.value ? (input.value + ' ') : '') + text
+  }catch(e){
+    alert('ASR 失败：' + e?.message)
+  }
 }
 
-function toggleVoice () { chat.settings.voiceEnabled = !chat.settings.voiceEnabled }
-
-async function send () {
-  const v = text.value.trim()
-  if (!v) return
-  chat.addMessage({ role: 'user', content: v, ts: Date.now() })
-  text.value = ''
-  await converse(v)
+async function speak(text){
+  try{
+    const blob = await synthesize({ text, style: 'style2' })
+    const url = URL.createObjectURL(blob)
+    const audio = new Audio(url)
+    audio.play()
+  }catch(e){
+    alert('TTS 失败：' + e?.message)
+  }
 }
+
+onMounted(hydrateSessions)
 </script>
 
 <style scoped>
-.chat-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.chat-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 200px;
-}
-.chat-input {
-  margin-top: 10px;
-}
+.chat-wrap{ max-width: 960px; margin: 0 auto; display:flex; flex-direction:column; gap:12px; }
+.panel{ background: white; border-radius: 12px; padding: 12px; box-shadow: var(--shadow); }
+.messages{ height: 52vh; overflow: auto; display:flex; flex-direction:column; gap:12px; }
+.msg{ display:flex; }
+.msg.user{ justify-content: flex-end; }
+.msg.ai{ justify-content: flex-start; }
+.bubble{ background: #f7f7f7; padding: 10px 12px; border-radius: 12px; max-width: 80%; white-space: pre-wrap; }
+.input-row{ display:flex; flex-direction:column; gap:8px; }
+.input{ width:100%; padding:8px; border-radius:8px; border:1px solid #ddd; }
+.row{ display:flex; }
+.select{ padding:6px 8px; border-radius:8px; border:1px solid #ddd; }
+.btn{ padding:6px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+.btn.ghost{ background: transparent; }
+.btn.primary{ background: #4a8; color:white; border-color:#4a8; }
+.btn.danger{ border-color:#b55; color:#b55; }
+.chip{ padding:4px 8px; border-radius: 999px; border:1px solid #ddd; cursor:pointer; }
 </style>

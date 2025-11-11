@@ -4,6 +4,7 @@
 
     <div class="card">
       <div class="row" style="gap:10px; align-items:center;">
+        <label class="chip"><input type="checkbox" v-model="persistToDB"> 存入数据库</label>
         <input class="input flex1" v-model="q" placeholder="输入关键词，如：golang、LLM……"/>
         <select v-model="mode" class="select">
           <option value="semantic">Semantic</option>
@@ -61,6 +62,7 @@ import { ref } from 'vue'
 import { webAPI } from '../api/http'
 
 const q = ref('')
+const persistToDB = ref(false)
 const urlsText = ref('')
 const topK = ref(6)
 const mode = ref('semantic')   // 目前后端未用到，只做保留
@@ -78,6 +80,11 @@ function parseUrls(text){
 }
 
 async function doSearch(){
+  // cache-first
+  const cacheKey = `websearch:${mode.value}:${topK.value}:${q.value}`
+  const cached = localStorage.getItem(cacheKey)
+  if(cached){ try{ results.value = JSON.parse(cached); return }catch{} }
+
   err.value = ''
   results.value = []
   loading.value = true
@@ -141,4 +148,5 @@ async function openPage(r){
 .ops { margin-top:8px; }
 .empty { color:#6b7280; }
 .sub { font-size:13px; margin-top:4px; }
+.chip{ padding:4px 8px; border-radius:999px; border:1px solid #ddd; display:flex; gap:6px; align-items:center; }
 </style>

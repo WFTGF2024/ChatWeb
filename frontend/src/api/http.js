@@ -1,76 +1,105 @@
+// src/api/http.js
 import axios from 'axios'
+import { getCookie } from '../utils/cookies'
 
-// ====== Base URLs ======
-const LLM_BASE  = import.meta.env.VITE_LLM_BASE  || 'http://127.0.0.1:7207'
-const ASR_BASE  = import.meta.env.VITE_ASR_BASE  || 'http://127.0.0.1:7205'
-const TTS_BASE  = import.meta.env.VITE_TTS_BASE  || 'http://127.0.0.1:7206'
-const CORE_BASE = import.meta.env.VITE_CORE_BASE || 'http://127.0.0.1:7210'
-
-// ====== Axios Instances ======
-// Core：你的主后端（/api/*、/web/*）
-export const httpCore = axios.create({ baseURL: CORE_BASE, timeout: 20000 })
-// 其他独立服务
-export const httpLLM  = axios.create({ baseURL: LLM_BASE,  timeout: 60000 })
-export const httpASR  = axios.create({ baseURL: ASR_BASE,  timeout: 60000 })
-export const httpTTS  = axios.create({ baseURL: TTS_BASE,  timeout: 60000 })
-// Web Search 可单独实例（也可以直接用 httpCore）
-export const httpWEB  = axios.create({ baseURL: CORE_BASE, timeout: 30000 })
-
-// 默认 JSON 头（ASR/TTS 场景按需在各自 API 里传 multipart/form-data）
-httpCore.defaults.headers.post['Content-Type'] = 'application/json'
-httpCore.defaults.headers.put['Content-Type']  = 'application/json'
-httpWEB .defaults.headers.post['Content-Type'] = 'application/json'
-httpWEB .defaults.headers.put['Content-Type']  = 'application/json'
-
-// ====== Token 注入 ======
-function getToken () {
-  try { return localStorage.getItem('token') || '' } catch { return '' }
-}
-
-;[httpCore, httpWEB, httpLLM, httpASR, httpTTS].forEach(inst => {
-  inst.interceptors.request.use(cfg => {
-    const t = getToken()
-    if (t) cfg.headers.Authorization = `Bearer ${t}`
-    return cfg
-  })
+// ---------------- 基础实例（只用 JWT 头，不走凭证） ----------------
+export const httpCore = axios.create({
+  baseURL: import.meta.env.VITE_CORE_BASE, // dev 建议 /core（Vite 代理），prod 也是 /core（Nginx 反代）
+  timeout: 20000,
+  withCredentials: false, // 只用 Authorization 头
 })
 
-// ====== 统一 401 处理（Core/Web 生效；LLM/ASR/TTS 不干预）======
-function onUnauthorized () {
-  try { localStorage.removeItem('token') } catch {}
-  // 已在登录页就不重定向，避免死循环
-  const here = location.pathname + location.search + location.hash
-  if (!location.pathname.startsWith('/login')) {
-    const back = encodeURIComponent(here || '/chat')
-    location.href = `/login?redirect=${back}`
+export const httpLLM = axios.create({
+  baseURL: import.meta.env.VITE_LLM_BASE,
+  timeout: 120000,
+  withCredentials: false,
+})
+
+export const httpASR = axios.create({
+  baseURL: import.meta.env.VITE_ASR_BASE,
+  timeout: 120000,
+  withCredentials: false,
+})
+
+export const httpTTS = axios.create({
+  baseURL: import.meta.env.VITE_TTS_BASE,
+  timeout: 120000,
+  withCredentials: false,
+})
+
+// ---------------- 统一加 Authorization 头（Core） ----------------
+httpCore.interceptors.request.use((cfg) => {
+  let token =
+    localStorage.getItem('token') ||
+    getCookie('jwt') ||
+    getCookie('token') ||
+    ''
+
+  if (token) {
+    token = token.startsWith('Bearer ') ? token.slice(7) : token
+    cfg.headers.Authorization = `Bearer ${token}`
   }
-}
-
-;[httpCore, httpWEB].forEach(inst => {
-  inst.interceptors.response.use(
-    (res) => res,
-    (err) => {
-      const resp = err?.response
-      // 只拦 Core/Web 的 401；其余状态直接抛出
-      if (resp && resp.status === 401) {
-        onUnauthorized()
-      }
-      return Promise.reject(err)
-    }
-  )
+  return cfg
 })
 
-// ====== 便捷导出：环境端点 ======
-export const endpoints = { LLM_BASE, ASR_BASE, TTS_BASE, CORE_BASE }
+// ---------------- 401 统一处理（Core） ----------------
+let redirecting401 = false
+httpCore.interceptors.response.use(
+  (r) => r,
+  async (err) => {
+    if (err?.response?.status === 401 && !redirecting401) {
+      redirecting401 = true
+      try {
+        const { default: router } = await import('@/router')
+        const from = router.currentRoute.value.fullPath
+        localStorage.removeItem('token')
+        router.replace({ path: '/login', query: { from } })
+      } finally {
+        setTimeout(() => (redirecting401 = false), 300)
+      }
+    }
+    return Promise.reject(err)
+  }
+)
 
-// ====== （可选）Web Search 便捷 API ======
-// 也可以单独建文件 src/api/websearch.js 引入 httpWEB 使用
+// ---------------- Web 搜索相关 API（供 WebSearch.vue 使用） ----------------
 export const webAPI = {
-  search: (payload) => httpCore.post('/web/search', payload),                 // 返回 axios Response
-  page:   (id)      => httpCore.get(`/web/page/${id}`),
-  list:   (q='', limit=20, offset=0) =>
-             httpCore.get('/web/items', { params: { q, limit, offset } }),
-  create: (body)    => httpCore.post('/web/items', body),
-  update: (id, b)   => httpCore.put(`/web/items/${id}`, b),
-  remove: (id)      => httpCore.delete(`/web/items/${id}`)
+  // 搜索：支持 { q, mode, top_k } 或 { urls, top_k }
+  search: (body) => httpCore.post('/web/search', body),
+
+  // 列表：已抓取的条目
+  items: () => httpCore.get('/web/items'),
+
+  // 新建/抓取页面（可选）
+  create: (payload) => httpCore.post('/web/items', payload),
+
+  // 查看页面全文（WebSearch.vue 的 openPage 用到）
+  page: (id) => httpCore.get(`/web/page/${id}`),
+
+  // 更新/删除（可选）
+  update: (id, payload) => httpCore.put(`/web/items/${id}`, payload),
+  remove: (id) => httpCore.delete(`/web/items/${id}`),
+
+  // 触发入库/分块（可选）
+  ingest: () => httpCore.post('/web/ingest'),
+  chunk: () => httpCore.post('/web/chunk'),
+}
+
+// ---------------- 工具：逐行读取 NDJSON ----------------
+export async function readNDJsonStream(response, onChunk) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const parts = buf.split(/\r?\n/)
+    buf = parts.pop() || ''
+    for (const line of parts) {
+      if (!line.trim()) continue
+      try { onChunk(JSON.parse(line)) } catch {}
+    }
+  }
+  if (buf.trim()) { try { onChunk(JSON.parse(buf.trim())) } catch {} }
 }

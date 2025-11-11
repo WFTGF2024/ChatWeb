@@ -12,7 +12,7 @@ export const useChatStore = defineStore('chat', {
       temperature: 0.7,
       ttsStyle: 'style1',
       emoWeight: 0.65,
-      voiceEnabled: true,
+      voiceEnabled: false,
       stream: true
     },
     kbContext: '' // 由右侧知识面板注入的上下文

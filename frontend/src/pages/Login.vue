@@ -27,9 +27,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useUserStore } from '../store/user'
-import { login, me } from '../api/core'   // ← 继续沿用你已有的 /api/core 接口
-
+import { login, me } from '../api/auth'  
+import { useUserStore } from '../store/user.js' 
 const router = useRouter()
 const route  = useRoute()
 const user   = useUserStore()
@@ -45,6 +44,7 @@ const redirectTarget = computed(() => {
   try {
     if (typeof r === 'string' && r.length) return decodeURIComponent(r)
   } catch {}
+
   return '/chat'
 })
 

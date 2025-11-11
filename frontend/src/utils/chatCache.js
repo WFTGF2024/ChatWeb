@@ -1,60 +1,64 @@
-// 简单 localStorage 多会话缓存
-const LIST_KEY = 'chat:list:v1'
-const SESSION_KEY = (id) => `chat:session:${id}`
+// localStorage-based cache with TTL + chat helpers
+const LIST_KEY = 'chat:list:v2'
+const SESSION_KEY = (id) => `chat:session:${id}:v2`
 
-const readJSON = (k, d = null) => {
-  try {
-    const v = localStorage.getItem(k)
-    return v ? JSON.parse(v) : d
-  } catch {
-    return d
-  }
+const readJSON = (k, d=null) => {
+  try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch{ return d }
 }
 const writeJSON = (k, v) => localStorage.setItem(k, JSON.stringify(v))
 
-export function listChats () {
+export function listChats(){
   return readJSON(LIST_KEY, [])
 }
-
-export function createChat (title = '新会话') {
-  const id = String(Date.now()) + Math.random().toString(16).slice(2, 8)
+export function upsertChatMeta({ id, title }){
+  const now = Date.now()
   const list = listChats()
-  const item = { id, title, updatedAt: Date.now() }
-  writeJSON(LIST_KEY, [item, ...list])
-  return item
-}
-
-export function renameChat (id, title) {
-  const list = listChats().map(x => x.id === id ? { ...x, title, updatedAt: Date.now() } : x)
+  const i = list.findIndex(x => x.id === id)
+  if(i >= 0){
+    list[i] = { ...list[i], title, updatedAt: now }
+  }else{
+    list.unshift({ id, title, updatedAt: now })
+  }
   writeJSON(LIST_KEY, list)
+  return list
 }
-
-export function deleteChat (id) {
+export function removeChat(id){
   const list = listChats().filter(x => x.id !== id)
   writeJSON(LIST_KEY, list)
   localStorage.removeItem(SESSION_KEY(id))
+  return list
 }
-
-// 新版：不仅能拿到 messages，还能拿到 meta（比如你选的角色风格）
-export function loadChat (id) {
-  const s = readJSON(SESSION_KEY(id))
-  if (!s) return { messages: [], meta: {} }
-
-  // 兼容老数据：老的就是一个数组
-  if (Array.isArray(s)) {
-    return { messages: s, meta: {} }
-  }
-
-  const messages = Array.isArray(s.messages) ? s.messages : []
-  const meta = s.meta || {}
-  return { messages, meta }
+export function loadChat(id){
+  const s = readJSON(SESSION_KEY(id), null)
+  if(!s) return { messages: [], meta: {}, ts: 0 }
+  return s
 }
-
-// 新版：允许存 { messages, meta }，也兼容老的只传数组的方式
-export function saveChat (id, payload) {
+export function saveChat(id, payload){
   const messages = Array.isArray(payload) ? payload : (payload.messages || [])
   const meta = Array.isArray(payload) ? {} : (payload.meta || {})
-  writeJSON(SESSION_KEY(id), { ts: Date.now(), messages, meta })
-  const list = listChats().map(x => x.id === id ? { ...x, updatedAt: Date.now() } : x)
+  const s = { messages, meta, ts: Date.now() }
+  writeJSON(SESSION_KEY(id), s)
+  return s
+}
+
+// Generic cache with TTL
+export async function getWithCache(cacheKey, ttlMs, fetcher){
+  const cached = readJSON(cacheKey, null)
+  const now = Date.now()
+  if(cached && (now - (cached.ts || 0) < ttlMs)){
+    return cached.value
+  }
+  const value = await fetcher()
+  writeJSON(cacheKey, { ts: now, value })
+  return value
+}
+export function deleteChat(id) {
+  const list = listChats().filter(x => x.id !== id)
   writeJSON(LIST_KEY, list)
+  localStorage.removeItem(SESSION_KEY(id))
+  // 同步到后端
+  if (user.isLogin) {
+    httpCore.delete(`/chat/sessions/${id}`)
+      .catch(err => console.error('Failed to delete session:', err))
+  }
 }

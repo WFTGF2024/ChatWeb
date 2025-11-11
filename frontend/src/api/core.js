@@ -1,40 +1,29 @@
 import { httpCore } from './http'
 
-export async function register(payload){
-  const { data } = await httpCore.post('/api/auth/register', payload)
+// ---- Chat sessions & messages ----
+export async function createSession(title){
+  const { data } = await httpCore.post('/chat/sessions', { title })
   return data
 }
-
-export async function login({ username, password }){
-  const { data } = await httpCore.post('/api/auth/login', { username, password })
+export async function listSessions(){
+  const { data } = await httpCore.get('/chat/sessions')
   return data
 }
-
-export async function me(){
-  const { data } = await httpCore.get('/api/auth/me')
+export async function removeSession(id){
+  const { data } = await httpCore.delete(`/chat/sessions/${id}`)
   return data
 }
-
-// 聊天记录（简化：将 JSON 压缩为 base64 data URL 存到 content_url 字段）
-export async function saveChat({ user_id, record_id, content_url }){
-  const { data } = await httpCore.post('/chat/api/chat/save', { user_id, record_id, content_url })
+export async function appendMessage(session_id, role, content){
+  const body = { session_id, role, content }
+  const { data } = await httpCore.post('/chat/messages', body)
   return data
 }
-export async function listChats(user_id){
-  const { data } = await httpCore.get(`/chat/api/chat/${user_id}`)
+export async function listMessages(session_id){
+  const { data } = await httpCore.get(`/chat/sessions/${session_id}/messages`)
   return data
 }
-
-// 会员
-export async function getMembership(user_id){
-  const { data } = await httpCore.get(`/api/membership/${user_id}`)
-  return data
-}
-export async function listOrders(user_id){
-  const { data } = await httpCore.get(`/api/membership/orders/${user_id}`)
-  return data
-}
-export async function createOrder({ user_id, duration_months, amount, payment_method }){
-  const { data } = await httpCore.post('/api/membership/orders', { user_id, duration_months, amount, payment_method })
-  return data
+export async function streamCompletion(session_id, content, model=''){
+  // Backend supports: POST /chat/sessions/:id/stream { content, model }
+  const resp = await httpCore.post(`/chat/sessions/${session_id}/stream`, { content, model }, { responseType: 'stream' })
+  return resp
 }
