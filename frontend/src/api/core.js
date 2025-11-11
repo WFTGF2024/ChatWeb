@@ -27,3 +27,13 @@ export async function streamCompletion(session_id, content, model=''){
   const resp = await httpCore.post(`/chat/sessions/${session_id}/stream`, { content, model }, { responseType: 'stream' })
   return resp
 }
+
+export async function updateSession(id, title) {
+  const t = (title || '').trim()
+  if (!t) {
+    // 可以直接抛个错误，让调用方去提示“标题不能为空”
+    throw new Error('title required')
+  }
+  const { data } = await httpCore.put(`/chat/sessions/${id}`, { title: t })
+  return data
+}

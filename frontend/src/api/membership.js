@@ -51,10 +51,21 @@ export async function listMembership() {
   return res.data
 }
 
-/** 获取某用户当前会员信息（可能为 null/404） */
+/**
+ * 获取某用户当前会员信息
+ * 兼容两种后端风格：
+ *  - GET /api/membership?user_id=xxx
+ *  - GET /api/membership/:user_id
+ * 若返回 404，视为“未开通”，函数返回 null（而不是抛错）
+ */
 export async function getMembershipByUser(user_id) {
-  const res = await httpCore.get(`/api/membership/${user_id}`)
-  return res.data
+  try {
+    const res = await httpCore.get(`/api/membership/${user_id}`)
+    return res.data
+  } catch (e) {
+    if (e?.response?.status === 404) return null // 没开通过会员 -> 返回 null
+    throw e
+  }
 }
 
 /**
@@ -73,11 +84,11 @@ export async function updateMembership(membership_id, payload) {
 }
 
 
-/* ==================== 组合 helper（可选） ==================== */
+/* ==================== 组合 helper（联调/验收友好） ==================== */
 
 /**
  * 一次性下单并刷新视图所需数据
- * - openImmediately: 为 true 时，模拟“支付成功即开通会员”（需后端允许）
+ * - openImmediately: 为 true 时，模拟“支付成功即开通会员”（需后端允许或提供测试接口）
  * - membershipPayload: 开通会员时的补充字段，如 { start_date, expire_date, status:'active' }
  */
 export async function purchaseAndRefresh({
@@ -92,21 +103,25 @@ export async function purchaseAndRefresh({
 
   let membership = null
   if (openImmediately) {
+    // 这里假设后端开放了直接创建/开通的接口用于联调
     membership = await createMembership({ user_id, status: 'active', ...membershipPayload })
   }
 
   const [latest, orders] = await Promise.all([
     getLatestOrder(user_id).catch(() => null),
-    listOrdersByUser(user_id).catch(() => [])
+    listOrdersByUser(user_id).catch(() => []),
   ])
 
   return { order, membership, latest, orders }
 }
 
-/* ==================== 认证（可选搬到这里，便于页面只依赖一个模块） ==================== */
+/* ==================== 认证（可选） ==================== */
 
 /** /api/auth/me */
 export async function me() {
   const res = await httpCore.get('/api/auth/me')
   return res.data
 }
+
+// 兼容旧命名（如果页面里用到了 getMembership）
+export const getMembership = getMembershipByUser
