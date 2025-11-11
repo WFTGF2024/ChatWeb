@@ -2,10 +2,8 @@
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS `user_permanent_files`;
 DROP TABLE IF EXISTS `user_files`;
-DROP TABLE IF EXISTS `user_action_logs`;
 DROP TABLE IF EXISTS `membership_orders`;
-DROP TABLE IF EXISTS `membership_info`;
-DROP TABLE IF EXISTS `chat_history`;
+DROP TABLE IF EXISTS `membership_infos`;
 DROP TABLE IF EXISTS `users`;
 SET FOREIGN_KEY_CHECKS = 1;
 
@@ -63,26 +61,6 @@ CREATE TABLE `membership_orders` (
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- 5) 用户操作日志（若需要和 users 关联，类型也统一；并加外键）
-CREATE TABLE `user_action_logs` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `user_id` INT UNSIGNED NOT NULL,
-  `action_type` VARCHAR(64) NOT NULL,
-  `resource_type` VARCHAR(64) NOT NULL,
-  `resource_id` VARCHAR(128) NOT NULL,
-  `request_id` VARCHAR(128) DEFAULT NULL,
-  `ip_addr` VARCHAR(64) DEFAULT NULL,
-  `user_agent` VARCHAR(512) DEFAULT NULL,
-  `extra_json` JSON DEFAULT NULL,
-  `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_user_time` (`user_id`,`created_at`),
-  KEY `idx_action_type` (`action_type`),
-  KEY `idx_resource` (`resource_type`,`resource_id`),
-  CONSTRAINT `user_action_logs_ibfk_1`
-    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 CREATE TABLE `chat_sessions` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `user_id` INT UNSIGNED NOT NULL,
@@ -95,6 +73,7 @@ CREATE TABLE `chat_sessions` (
     FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE `chat_messages` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `user_id` INT UNSIGNED NOT NULL,
@@ -112,22 +91,6 @@ CREATE TABLE `chat_messages` (
     FOREIGN KEY (`session_id`) REFERENCES `chat_sessions` (`id`)
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-
-CREATE TABLE `password_reset_tokens` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `user_id` INT UNSIGNED NOT NULL,
-  `token` VARCHAR(64) NOT NULL,
-  `expire_at` DATETIME NOT NULL,
-  `used` TINYINT(1) NOT NULL DEFAULT 0,
-  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_token` (`token`),
-  KEY `idx_user_id` (`user_id`),
-  CONSTRAINT `password_reset_tokens_ibfk_1`
-    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS web_pages (
     id INT PRIMARY KEY AUTO_INCREMENT,
