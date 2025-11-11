@@ -6,14 +6,15 @@ import (
 
 // MembershipInfo 会员信息模型
 type MembershipInfo struct {
-	MembershipID uint      `json:"membership_id" gorm:"primaryKey"`
-	UserID       uint      `json:"user_id" gorm:"not null"`
-	StartDate    string    `json:"start_date" gorm:"type:date;not null"`
-	ExpireDate   string    `json:"expire_date" gorm:"type:date;not null"`
-	Status       string    `json:"status" gorm:"type:enum('active','expired');default:'active'"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+    MembershipID uint      `json:"membership_id" gorm:"primaryKey"`
+    UserID       uint      `json:"user_id" gorm:"type:int unsigned;not null;uniqueIndex:uniq_user"`
+    StartDate    time.Time `json:"start_date" gorm:"type:datetime;not null"`
+    ExpireDate   time.Time `json:"expire_date" gorm:"type:datetime;not null"`
+    Status       string    `json:"status" gorm:"type:enum('active','expired');default:'active'"`
+    CreatedAt    time.Time `json:"created_at"`
+    UpdatedAt    time.Time `json:"updated_at"`
 }
+
 
 // CreateMembershipRequest 创建会员信息请求
 type CreateMembershipRequest struct {

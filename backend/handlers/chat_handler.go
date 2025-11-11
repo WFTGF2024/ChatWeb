@@ -273,3 +273,33 @@ func HandleDeleteSession(c *gin.Context) {
 
     c.JSON(http.StatusOK, gin.H{"success": true, "message": "会话已删除"})
 }
+// PUT /api/chats/:session_id  更新会话信息（目前只改标题）
+func HandleUpdateSession(c *gin.Context) {
+    userID := c.GetUint("user_id")
+    sessionID := c.Param("session_id")
+
+    // 校验一下路径里的 id
+    if _, err := strconv.ParseUint(sessionID, 10, 64); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+        return
+    }
+
+    var req struct {
+        Title string `json:"title"`
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+        return
+    }
+
+    chatService := &services.ChatService{}
+    if err := chatService.UpdateSession(userID, sessionID, req.Title); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "success": true,
+        "message": "会话已更新",
+    })
+}

@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"backend/database"
@@ -10,7 +11,40 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// MembershipService 会员服务接口
+/* ---------- 小工具：解析 & 格式化日期 ---------- */
+
+// 允许两种输入：RFC3339（2025-11-12T08:00:00Z）或日期（YYYY-MM-DD）
+func parseAnyDate(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, errors.New("empty date")
+	}
+	// RFC3339
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// 仅日期
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	// 常见本地时间
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid date: %q (expect RFC3339 or YYYY-MM-DD)", s)
+}
+
+// 如果你的表是 DATE 类型，建议只返回 YYYY-MM-DD；若为 DATETIME 可改成 RFC3339
+func fmtDate(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02")
+	// 若需要完整时间戳：
+	// return t.Format(time.RFC3339)
+}
+
+/* ---------- 接口定义 ---------- */
+
 type MembershipService interface {
 	GetMembershipInfo(userID uint) (*models.MembershipResponse, error)
 	GetAllMemberships() ([]models.MembershipResponse, error)
@@ -23,72 +57,59 @@ type MembershipService interface {
 	GetRecentOrders(userID uint, n int) ([]models.OrderResponse, error)
 }
 
-// membershipService 会员服务实现
 type membershipService struct{}
 
-// NewMembershipService 创建会员服务实例
-func NewMembershipService() MembershipService {
-	return &membershipService{}
-}
+func NewMembershipService() MembershipService { return &membershipService{} }
 
-// GetMembershipInfo 获取会员信息
+/* ---------- 会员 ---------- */
+
 func (s *membershipService) GetMembershipInfo(userID uint) (*models.MembershipResponse, error) {
 	log.Info("开始获取会员信息")
 	log.WithField("userID", userID).Debug("获取会员信息请求参数")
 
-	// 查找会员信息
 	var membership models.MembershipInfo
 	if err := database.DB.Where("user_id = ?", userID).First(&membership).Error; err != nil {
 		log.WithError(err).WithField("userID", userID).Warn("会员信息不存在")
 		return nil, errors.New("会员信息不存在")
 	}
 
-	// 构建响应，直接使用字符串日期
-	membershipResp := models.MembershipResponse{
+	resp := models.MembershipResponse{
 		MembershipID: membership.MembershipID,
 		UserID:       membership.UserID,
-		StartDate:    membership.StartDate,  // 直接使用字符串
-		ExpireDate:   membership.ExpireDate, // 直接使用字符串
+		StartDate:    fmtDate(membership.StartDate),
+		ExpireDate:   fmtDate(membership.ExpireDate),
 		Status:       membership.Status,
 	}
-
 	log.WithField("userID", userID).Info("获取会员信息成功")
-	return &membershipResp, nil
+	return &resp, nil
 }
 
-// GetAllMemberships 获取所有会员信息
 func (s *membershipService) GetAllMemberships() ([]models.MembershipResponse, error) {
 	log.Info("开始获取所有会员信息")
 
-	// 查询所有会员信息
 	var memberships []models.MembershipInfo
 	if err := database.DB.Find(&memberships).Error; err != nil {
 		log.WithError(err).Error("查询会员信息失败")
 		return nil, errors.New("查询会员信息失败")
 	}
-
-	// 如果没有会员信息，返回空数组而不是nil
 	if len(memberships) == 0 {
 		return []models.MembershipResponse{}, nil
 	}
 
-	// 构建响应
-	responses := make([]models.MembershipResponse, len(memberships))
-	for i, membership := range memberships {
-		responses[i] = models.MembershipResponse{
-			MembershipID: membership.MembershipID,
-			UserID:       membership.UserID,
-			StartDate:    membership.StartDate,
-			ExpireDate:   membership.ExpireDate,
-			Status:       membership.Status,
+	out := make([]models.MembershipResponse, len(memberships))
+	for i, m := range memberships {
+		out[i] = models.MembershipResponse{
+			MembershipID: m.MembershipID,
+			UserID:       m.UserID,
+			StartDate:    fmtDate(m.StartDate),
+			ExpireDate:   fmtDate(m.ExpireDate),
+			Status:       m.Status,
 		}
 	}
-
 	log.Info("获取所有会员信息成功")
-	return responses, nil
+	return out, nil
 }
 
-// CreateMembership 创建会员信息
 func (s *membershipService) CreateMembership(req models.CreateMembershipRequest) (*models.MembershipResponse, error) {
 	log.Info("开始创建会员信息")
 	log.WithFields(log.Fields{
@@ -98,48 +119,53 @@ func (s *membershipService) CreateMembership(req models.CreateMembershipRequest)
 		"status":     req.Status,
 	}).Debug("创建会员信息请求参数")
 
-	// 检查用户是否存在
+	// 用户存在校验
 	var user models.User
 	if err := database.DB.First(&user, req.UserID).Error; err != nil {
 		log.WithError(err).WithField("userID", req.UserID).Warn("用户不存在")
 		return nil, errors.New("用户不存在")
 	}
 
-	// 检查是否已有会员信息
-	var existingMembership models.MembershipInfo
-	if err := database.DB.Where("user_id = ?", req.UserID).First(&existingMembership).Error; err == nil {
+	// 唯一性校验（一个用户只能有一条会员记录）
+	var existing models.MembershipInfo
+	if err := database.DB.Where("user_id = ?", req.UserID).First(&existing).Error; err == nil {
 		log.WithField("userID", req.UserID).Warn("用户已有会员信息")
 		return nil, errors.New("用户已有会员信息")
 	}
 
-	// 创建新会员信息，直接使用字符串日期
+	// 解析日期字符串为 time.Time
+	start, err := parseAnyDate(req.StartDate)
+	if err != nil {
+		return nil, fmt.Errorf("start_date 解析失败: %w", err)
+	}
+	expire, err := parseAnyDate(req.ExpireDate)
+	if err != nil {
+		return nil, fmt.Errorf("expire_date 解析失败: %w", err)
+	}
+
 	newMembership := models.MembershipInfo{
 		UserID:     req.UserID,
-		StartDate:  req.StartDate,  // 直接使用字符串
-		ExpireDate: req.ExpireDate, // 直接使用字符串
+		StartDate:  start,
+		ExpireDate: expire,
 		Status:     req.Status,
 	}
 
-	// 保存到数据库
 	if err := database.DB.Create(&newMembership).Error; err != nil {
 		log.WithError(err).Error("创建会员信息失败")
 		return nil, errors.New("创建会员信息失败")
 	}
 
-	// 构建响应，直接使用字符串日期
-	membershipResp := models.MembershipResponse{
+	resp := models.MembershipResponse{
 		MembershipID: newMembership.MembershipID,
 		UserID:       newMembership.UserID,
-		StartDate:    newMembership.StartDate,  // 直接使用字符串
-		ExpireDate:   newMembership.ExpireDate, // 直接使用字符串
+		StartDate:    fmtDate(newMembership.StartDate),
+		ExpireDate:   fmtDate(newMembership.ExpireDate),
 		Status:       newMembership.Status,
 	}
-
 	log.WithField("membershipID", newMembership.MembershipID).Info("创建会员信息成功")
-	return &membershipResp, nil
+	return &resp, nil
 }
 
-// UpdateMembership 更新会员信息
 func (s *membershipService) UpdateMembership(membershipID uint, req models.UpdateMembershipRequest) error {
 	log.Info("开始更新会员信息")
 	log.WithFields(log.Fields{
@@ -148,20 +174,20 @@ func (s *membershipService) UpdateMembership(membershipID uint, req models.Updat
 		"status":       req.Status,
 	}).Debug("更新会员信息请求参数")
 
-	// 查找会员信息
 	var membership models.MembershipInfo
 	if err := database.DB.First(&membership, membershipID).Error; err != nil {
 		log.WithError(err).WithField("membershipID", membershipID).Warn("会员信息不存在")
 		return errors.New("会员信息不存在")
 	}
 
-	// 准备更新数据
 	updateData := make(map[string]interface{})
-
 	if req.ExpireDate != "" {
-		updateData["expire_date"] = req.ExpireDate
+		if t, err := parseAnyDate(req.ExpireDate); err == nil {
+			updateData["expire_date"] = t
+		} else {
+			return fmt.Errorf("expire_date 解析失败: %w", err)
+		}
 	}
-
 	if req.Status != "" {
 		updateData["status"] = req.Status
 	}
@@ -177,19 +203,16 @@ func (s *membershipService) UpdateMembership(membershipID uint, req models.Updat
 	return nil
 }
 
-// DeleteMembership 删除会员信息
 func (s *membershipService) DeleteMembership(membershipID uint) error {
 	log.Info("开始删除会员信息")
 	log.WithField("membershipID", membershipID).Debug("删除会员信息请求参数")
 
-	// 查找会员信息
 	var membership models.MembershipInfo
 	if err := database.DB.First(&membership, membershipID).Error; err != nil {
 		log.WithError(err).WithField("membershipID", membershipID).Warn("会员信息不存在")
 		return errors.New("会员信息不存在")
 	}
 
-	// 删除会员信息
 	if err := database.DB.Delete(&membership).Error; err != nil {
 		log.WithError(err).Error("删除会员信息失败")
 		return errors.New("删除会员信息失败")
@@ -199,44 +222,39 @@ func (s *membershipService) DeleteMembership(membershipID uint) error {
 	return nil
 }
 
-// GetMembershipOrders 获取会员订单记录
+/* ---------- 订单 ---------- */
+
 func (s *membershipService) GetMembershipOrders(userID uint) ([]models.OrderResponse, error) {
 	log.Info("开始获取会员订单记录")
 	log.WithField("userID", userID).Debug("获取会员订单记录请求参数")
 
-	// 查找用户
 	var user models.User
 	if err := database.DB.First(&user, userID).Error; err != nil {
 		log.WithError(err).WithField("userID", userID).Warn("用户不存在")
 		return nil, errors.New("用户不存在")
 	}
 
-	// 查询会员订单
 	var orders []models.MembershipOrder
 	if err := database.DB.Where("user_id = ?", userID).Order("purchase_date DESC").Find(&orders).Error; err != nil {
 		log.WithError(err).Error("查询会员订单失败")
 		return nil, errors.New("查询会员订单失败")
 	}
 
-	// 构建响应
-	var responses []models.OrderResponse
-	for _, order := range orders {
-		resp := models.OrderResponse{
-			OrderID:        order.OrderID,
-			UserID:         order.UserID,
-			PurchaseDate:   order.PurchaseDate,
-			DurationMonths: order.DurationMonths,
-			Amount:         order.Amount,
-			PaymentMethod:  order.PaymentMethod,
-		}
-		responses = append(responses, resp)
+	res := make([]models.OrderResponse, 0, len(orders))
+	for _, o := range orders {
+		res = append(res, models.OrderResponse{
+			OrderID:        o.OrderID,
+			UserID:         o.UserID,
+			PurchaseDate:   o.PurchaseDate,
+			DurationMonths: o.DurationMonths,
+			Amount:         o.Amount,
+			PaymentMethod:  o.PaymentMethod,
+		})
 	}
-
 	log.WithField("userID", userID).Info("获取会员订单记录成功")
-	return responses, nil
+	return res, nil
 }
 
-// CreateOrder 创建订单
 func (s *membershipService) CreateOrder(req models.CreateOrderRequest) (*models.OrderResponse, error) {
 	log.Info("开始创建订单")
 	log.WithFields(log.Fields{
@@ -246,14 +264,12 @@ func (s *membershipService) CreateOrder(req models.CreateOrderRequest) (*models.
 		"paymentMethod":  req.PaymentMethod,
 	}).Debug("创建订单请求参数")
 
-	// 检查用户是否存在
 	var user models.User
 	if err := database.DB.First(&user, req.UserID).Error; err != nil {
 		log.WithError(err).WithField("userID", req.UserID).Warn("用户不存在")
 		return nil, errors.New("用户不存在")
 	}
 
-	// 创建新订单
 	newOrder := models.MembershipOrder{
 		UserID:         req.UserID,
 		PurchaseDate:   time.Now(),
@@ -261,15 +277,12 @@ func (s *membershipService) CreateOrder(req models.CreateOrderRequest) (*models.
 		Amount:         req.Amount,
 		PaymentMethod:  req.PaymentMethod,
 	}
-
-	// 保存到数据库
 	if err := database.DB.Create(&newOrder).Error; err != nil {
 		log.WithError(err).Error("创建订单失败")
 		return nil, errors.New("创建订单失败")
 	}
 
-	// 构建响应
-	orderResp := models.OrderResponse{
+	resp := models.OrderResponse{
 		OrderID:        newOrder.OrderID,
 		UserID:         newOrder.UserID,
 		PurchaseDate:   newOrder.PurchaseDate,
@@ -277,32 +290,27 @@ func (s *membershipService) CreateOrder(req models.CreateOrderRequest) (*models.
 		Amount:         newOrder.Amount,
 		PaymentMethod:  newOrder.PaymentMethod,
 	}
-
 	log.WithField("orderID", newOrder.OrderID).Info("创建订单成功")
-	return &orderResp, nil
+	return &resp, nil
 }
 
-// GetLatestOrder 获取最近一条订单
 func (s *membershipService) GetLatestOrder(userID uint) (*models.OrderResponse, error) {
 	log.Info("开始获取最近一条订单")
 	log.WithField("userID", userID).Debug("获取最近一条订单请求参数")
 
-	// 查找用户
 	var user models.User
 	if err := database.DB.First(&user, userID).Error; err != nil {
 		log.WithError(err).WithField("userID", userID).Warn("用户不存在")
 		return nil, errors.New("用户不存在")
 	}
 
-	// 查询最近一条订单
 	var order models.MembershipOrder
 	if err := database.DB.Where("user_id = ?", userID).Order("purchase_date DESC").First(&order).Error; err != nil {
 		log.WithError(err).WithField("userID", userID).Warn("用户没有订单记录")
 		return nil, errors.New("用户没有订单记录")
 	}
 
-	// 构建响应
-	orderResp := models.OrderResponse{
+	resp := models.OrderResponse{
 		OrderID:        order.OrderID,
 		UserID:         order.UserID,
 		PurchaseDate:   order.PurchaseDate,
@@ -310,12 +318,10 @@ func (s *membershipService) GetLatestOrder(userID uint) (*models.OrderResponse, 
 		Amount:         order.Amount,
 		PaymentMethod:  order.PaymentMethod,
 	}
-
 	log.WithField("userID", userID).Info("获取最近一条订单成功")
-	return &orderResp, nil
+	return &resp, nil
 }
 
-// GetRecentOrders 获取最近N条订单
 func (s *membershipService) GetRecentOrders(userID uint, n int) ([]models.OrderResponse, error) {
 	log.Info("开始获取最近N条订单")
 	log.WithFields(log.Fields{
@@ -323,37 +329,32 @@ func (s *membershipService) GetRecentOrders(userID uint, n int) ([]models.OrderR
 		"n":      n,
 	}).Debug("获取最近N条订单请求参数")
 
-	// 查找用户
 	var user models.User
 	if err := database.DB.First(&user, userID).Error; err != nil {
 		log.WithError(err).WithField("userID", userID).Warn("用户不存在")
 		return nil, errors.New("用户不存在")
 	}
 
-	// 查询最近N条订单
 	var orders []models.MembershipOrder
 	if err := database.DB.Where("user_id = ?", userID).Order("purchase_date DESC").Limit(n).Find(&orders).Error; err != nil {
 		log.WithError(err).Error("查询订单失败")
 		return nil, errors.New("查询订单失败")
 	}
 
-	// 构建响应
-	var responses []models.OrderResponse
-	for _, order := range orders {
-		resp := models.OrderResponse{
-			OrderID:        order.OrderID,
-			UserID:         order.UserID,
-			PurchaseDate:   order.PurchaseDate,
-			DurationMonths: order.DurationMonths,
-			Amount:         order.Amount,
-			PaymentMethod:  order.PaymentMethod,
-		}
-		responses = append(responses, resp)
+	res := make([]models.OrderResponse, 0, len(orders))
+	for _, o := range orders {
+		res = append(res, models.OrderResponse{
+			OrderID:        o.OrderID,
+			UserID:         o.UserID,
+			PurchaseDate:   o.PurchaseDate,
+			DurationMonths: o.DurationMonths,
+			Amount:         o.Amount,
+			PaymentMethod:  o.PaymentMethod,
+		})
 	}
-
 	log.WithFields(log.Fields{
 		"userID": userID,
 		"n":      n,
 	}).Info("获取最近N条订单成功")
-	return responses, nil
+	return res, nil
 }

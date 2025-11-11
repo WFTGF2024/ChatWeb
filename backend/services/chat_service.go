@@ -197,3 +197,25 @@ func (s *ChatService) DeleteSession(userID uint, sessionID string) error {
 
     return tx.Commit().Error
 }
+
+// UpdateSession 更新会话信息（目前只支持改标题）
+func (s *ChatService) UpdateSession(userID uint, sessionID string, title string) error {
+    sid, err := parseSessionID(sessionID)
+    if err != nil {
+        return err
+    }
+
+    title = strings.TrimSpace(title)
+    if title == "" {
+        return errors.New("title required")
+    }
+
+    // 只更新当前用户的这条会话
+    return database.DB.
+        Model(&models.ChatSession{}).
+        Where("id = ? AND user_id = ?", sid, userID).
+        Updates(map[string]interface{}{
+            "title":      title,
+            "updated_at": time.Now(),
+        }).Error
+}
