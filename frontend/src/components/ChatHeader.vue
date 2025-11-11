@@ -18,7 +18,6 @@
           </div>
         </div>
       </div>
-      <small class="hint">可切换角色，自动映射到对应音色</small>
     </div>
     <slot />
   </div>
@@ -48,10 +47,105 @@ function choose(r){
 }
 </script>
 <style scoped>
-.role-picker{ position: relative; }
-.chip{ display:flex; align-items:center; gap:8px; background: rgba(0,0,0,.04); padding:8px 12px; border-radius: 999px; border: none; cursor: pointer; }
-.avatar{ width: 22px; height: 22px; display:inline-flex; align-items:center; justify-content:center; }
-.menu{ position:absolute; top: 110%; left: 0; min-width: 260px; background: white; border-radius: 12px; box-shadow: var(--shadow); padding: 8px; z-index: 100; }
-.menu-item{ display:flex; gap:10px; align-items:center; padding:8px; border-radius:10px; cursor:pointer; }
-.menu-item:hover{ background: rgba(0,0,0,.05); }
+:root{
+  /* 保底变量，外层没有也能用 */
+  --surface: #ffffff;
+  --line: rgba(226, 232, 240, .9);
+  --shadow-sm: 0 4px 18px rgba(15, 23, 42, .08);
+  --muted: #6b7280;
+}
+
+.role-picker{
+  position: relative;
+}
+
+/* 触发按钮 */
+.chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f3f4f6;
+  border: 1px solid rgba(148, 163, 184, .2);
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background .12s ease, box-shadow .12s ease, border .12s ease;
+  font-size: 13.5px;
+  color: #111827;
+}
+.chip:hover{
+  background: #e5edff;
+  border-color: rgba(37, 99, 235, .35);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, .08);
+}
+.chip svg{
+  opacity: .6;
+}
+
+/* 头像小圆 */
+.avatar{
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, .3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* 下拉菜单 */
+.menu{
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+  padding: 6px;
+  z-index: 100;
+  backdrop-filter: saturate(150%);
+}
+
+/* 每一项 */
+.menu-item{
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 6px 6px 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.menu-item:hover{
+  background: #eff6ff;
+}
+.menu-item .col{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.menu-item b{
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.menu-item .hint{
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 小屏下避免菜单太宽 */
+@media (max-width: 520px){
+  .menu{
+    min-width: 210px;
+  }
+  .chip{
+    max-width: 180px;
+  }
+}
 </style>

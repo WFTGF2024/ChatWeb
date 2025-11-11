@@ -42,23 +42,35 @@
         class="msg"
         :class="m.role === 'assistant' ? 'ai' : 'user'"
       >
-        <div class="avatar" :aria-label="m.role">{{ m.role === 'assistant' ? '🤖' : '🧑' }}</div>
+        <div class="avatar" :aria-label="m.role">
+          {{ m.role === 'assistant' ? '🤖' : '🧑' }}
+        </div>
         <div class="bubble">
-          <pre class="content">{{ m.content }}</pre>
+          <div class="content markdown-body" v-html="renderMarkdown(m.content)"></div>
+
           <div class="inline-actions" v-if="m.role === 'assistant'">
-            <button class="chip" @click="speak(m.content)">🔊 朗读</button>
+            <button class="chip" @click="speak(m.content)" :disabled="speaking">
+              🔊 朗读
+            </button>
           </div>
         </div>
       </div>
-
-      <div v-if="streamingText" class="msg ai">
-        <div class="avatar">🤖</div>
-        <div class="bubble typing">
-          <span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>
-        <div class="content live">{{ streamingText }}</div>
-        </div>
-      </div>
     </main>
+
+    <!-- 苏格拉底深度追问（显示在输入框上方，不在消息里显示） -->
+    <section v-if="isSocrates && deepQuestions.length" class="dq-panel">
+      <div class="dq-title">你可以继续问：</div>
+      <div class="dq-list">
+        <button
+          v-for="(q, i) in deepQuestions"
+          :key="i"
+          class="dq-item"
+          @click="fillQuestion(q)"
+        >
+          {{ q }}
+        </button>
+      </div>
+    </section>
 
     <!-- 输入区（吸底） -->
     <footer class="composer">
@@ -73,7 +85,9 @@
 
       <div class="composer-actions">
         <AudioRecorder @done="onAudioDone" />
-        <button class="btn primary" :disabled="sending || !input.trim()" @click="send">发送</button>
+        <button class="btn primary" :disabled="sending || !input.trim()" @click="send">
+          发送
+        </button>
       </div>
     </footer>
   </div>
@@ -81,8 +95,10 @@
 
 <script setup>
 import { ref, watch, onMounted, nextTick, computed } from 'vue'
+import MarkdownIt from 'markdown-it'
 import ChatHeader from '../components/ChatHeader.vue'
 import AudioRecorder from '../components/AudioRecorder.vue'
+
 import {
   listChats,
   upsertChatMeta,
@@ -91,6 +107,7 @@ import {
   saveChat,
   getWithCache
 } from '../utils/chatCache'
+
 import {
   createSession,
   listSessions,
@@ -99,72 +116,26 @@ import {
   listMessages,
   updateSession
 } from '../api/core'
+
 import { chatStream } from '../api/llm'
 import { asr as asrOnce } from '../api/asr'
 import { synthesize } from '../api/tts'
-
-// --- TTS segmented playback & merge ---
+import { buildSystemPrompt } from '../utils/prompts'
 import { mergeWaveBlobs } from '../utils/audio'
-const speaking = ref(false)
-const segments = ref([])  // { text, blob, url }
-const mergedAudioUrl = ref('')
-
-function extractParagraphs(text){
-  let t = text
-    .replace(/```[\s\S]*?```/g, '') // 去掉代码块
-    .replace(/^>.*$/gm, '')         // 去掉引用
-    .replace(/^\s*\*\*.*\*\*\s*$/gm, '') // 去掉粗体标题行
-  const paras = t.split(/\n{2,}/).map(s=>s.trim()).filter(s=>s && s.length > 2)
-  const final = []
-  for(const p of paras){
-    if(p.length <= 220){ final.push(p); continue }
-    const parts = p.split(/(?<=[。！？.!?])/)
-    let buf = ''
-    for(const part of parts){
-      if((buf + part).length > 220){ final.push(buf.trim()); buf = part }
-      else buf += part
-    }
-    if(buf.trim()) final.push(buf.trim())
-  }
-  return final.slice(0, 24)
-}
-
-async function ttsPlaySegments(text, style){
-  speaking.value = true
-  segments.value = []
-  mergedAudioUrl.value = ''
-  const paras = extractParagraphs(text)
-  const blobs = []
-  for(const p of paras){
-    try{
-      const blob = await synthesize({ text: p, style })
-      const url = URL.createObjectURL(blob)
-      segments.value.push({ text: p, blob, url })
-      blobs.push(blob)
-      // 顺序播放
-      await new Promise((resolve)=>{
-        const audio = new Audio(url)
-        audio.onended = resolve
-        audio.onerror = resolve
-        audio.play().catch(()=>resolve())
-      })
-    }catch(e){
-      console.warn('TTS segment failed', e)
-    }
-  }
-  try{
-    const merged = await mergeWaveBlobs(blobs)
-    mergedAudioUrl.value = URL.createObjectURL(merged)
-  }catch(e){ console.warn('merge failed', e) }
-  speaking.value = false
-}
-
 import { useChatStore } from '../store/chat'
 import { useUserStore } from '../store/user'
 
-const role = ref({ name: '默认', avatar: '🧠' })
+/** ===== Markdown 渲染 ===== */
+const md = new MarkdownIt({ linkify: true, breaks: true })
+function renderMarkdown (text) { return md.render(text || '') }
+
+/** ===== Store & 状态 ===== */
 const chat = useChatStore()
 const user = useUserStore()
+const role = computed(() => chat.currentRole || { name: '默认', avatar: '🧠' })
+const isLogin = computed(() => user.isLogin)
+const isSocrates = computed(() => chat?.currentRole?.id === 'socrates')
+
 const chatList = ref([])
 const chatId = ref(null)
 const messages = ref([])
@@ -172,172 +143,308 @@ const input = ref('')
 const sending = ref(false)
 const streamingText = ref('')
 
-const isLogin = computed(() => user.isLogin)
+/** ===== TTS segmented playback & merge ===== */
+const speaking = ref(false)
+const segments = ref([])  // { text, blob, url }
+const mergedAudioUrl = ref('')
 
+/** 深挖问题（仅苏格拉底角色使用） */
+const deepQuestions = ref([])
+
+/** ===== 滚动到底部 ===== */
 const msgBox = ref(null)
-function scrollToBottom(){ nextTick(()=>{ if(msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight }) }
+function scrollToBottom () {
+  nextTick(() => { if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight })
+}
 
-async function hydrateSessions(){
+/** ===== 会话装载 ===== */
+async function hydrateSessions () {
   // 本地优先
   chatList.value = listChats()
   // 已登录则拉取服务端（10s TTL）
-  if(isLogin.value) {
-    const server = await getWithCache('cache:sessions', 10_000, async ()=>{
-      try{
-        const data = await listSessions()
-        return data
-      }catch{ return [] }
+  if (isLogin.value) {
+    const server = await getWithCache('cache:sessions', 10_000, async () => {
+      try { return await listSessions() } catch { return [] }
     })
-    if(Array.isArray(server) && server.length){
+    if (Array.isArray(server) && server.length) {
       chatList.value = server.map(x => ({ id: x.id, title: x.title }))
       server.forEach(x => upsertChatMeta({ id: x.id, title: x.title }))
     }
   }
-  if(!chatId.value && chatList.value.length) chatId.value = chatList.value[0].id
+  if (!chatId.value && chatList.value.length) chatId.value = chatList.value[0].id
 }
 
-watch(chatId, async (id)=>{
-  if(!id) return
+watch(chatId, async (id) => {
+  if (!id) return
   const s = loadChat(id)
   messages.value = s.messages || []
-  if(messages.value.length === 0 && isLogin.value){
-    try{
+  if (messages.value.length === 0 && isLogin.value) {
+    try {
       const data = await listMessages(id)
-      if(Array.isArray(data)) messages.value = data
+      if (Array.isArray(data)) messages.value = data
       saveChat(id, { messages: messages.value })
-    }catch{}
+    } catch {}
   }
   scrollToBottom()
 })
 
-async function newChat(){
-  try{
+/** ===== 新建/重命名/删除会话 ===== */
+async function newChat () {
+  try {
     let data
-    if(isLogin.value) {
-      data = await createSession('新会话')
-    } else {
-      data = { id: Date.now(), title: '临时会话' }
-    }
+    if (isLogin.value) data = await createSession('新会话')
+    else data = { id: Date.now(), title: '临时会话' }
+
     const id = data.id || data.session_id || Date.now()
     upsertChatMeta({ id, title: data.title || '临时会话' })
     chatList.value = listChats()
     chatId.value = id
     messages.value = []
     saveChat(id, { messages: [] })
-  }catch(e){
+  } catch (e) {
     alert('创建会话失败：' + e?.message)
   }
 }
 
-async function renameChat() {
+async function renameChat () {
   if (!chatId.value) return
-
   const id = chatId.value
   const old = chatList.value.find(x => x.id === id)?.title || `会话 ${id}`
-
-  // 1. 让用户输入
   let title = window.prompt('输入新的会话名称（1-40 字）', old)
   if (title == null) return
-
-  // 2. 本地规整：去空格 + 截断
   title = title.trim().slice(0, 40)
-
-  // 3. 空的就不改；跟原来一样也不改
   if (!title || title === old) return
 
-  // 先备份一份，失败回滚
   const snapshot = [...chatList.value]
-
   try {
-    // 4. 本地乐观更新
     upsertChatMeta({ id, title })
     chatList.value = listChats()
-
-    // 5. 登录状态下同步到后端
-    if (isLogin.value) {
-      // 这里传“字符串”，不是对象
-      await updateSession(id, title)
-    }
+    if (isLogin.value) await updateSession(id, title)
   } catch (e) {
-    // 6. 出错回滚
     chatList.value = snapshot
     upsertChatMeta({ id, title: old })
     alert('重命名失败：' + (e?.response?.data?.error || e.message || '未知错误'))
   }
 }
 
-
-async function removeChat(){
-  if(!chatId.value) return
+async function removeChat () {
+  if (!chatId.value) return
   const id = chatId.value
-  if(isLogin.value) {
-    try{ await apiRemove(id) }catch{ /* ignore */ }
-  }
+  if (isLogin.value) { try { await apiRemove(id) } catch {} }
   cacheRemove(id)
   chatList.value = listChats()
   chatId.value = chatList.value[0]?.id || null
   messages.value = chatId.value ? (loadChat(chatId.value).messages) : []
 }
 
-async function send(){
-  if(!chatId.value) await newChat()
+/** ===== 发送（流式 + System + 深挖抽取 + 自动TTS） ===== */
+async function send () {
+  if (!chatId.value) {
+    await newChat()
+  }
   const id = chatId.value
   const userText = input.value.trim()
-  if(!userText) return
+  if (!userText) return
+
+  // 开始新一轮前，清空上轮 DEEP_QUESTIONS
+  deepQuestions.value = []
+
+  // 用户发言先落本地
   input.value = ''
-  const userMsg = { role:'user', content: userText }
+  const userMsg = { role: 'user', content: userText }
   messages.value.push(userMsg)
   saveChat(id, { messages: messages.value })
 
-  if(isLogin.value){ try{ await appendMessage(id, 'user', userText) }catch{} }
+  if (chat.isLogin) {
+    try { await appendMessage(id, 'user', userText) } catch (e) { console.warn('appendMessage failed:', e) }
+  }
 
   sending.value = true
   streamingText.value = ''
   scrollToBottom()
-  try{
-    const payload = isLogin.value ? messages.value : [{ role: 'user', content: userText }]
-    await chatStream(payload, (delta)=>{
+
+  try {
+    // 1) 角色 System Prompt
+    const sysContent = buildSystemPrompt({
+      role: chat.currentRole,
+      memorySummary: chat.memorySummary || '',
+      userPrefs: {}
+    })
+    const sysMsg = { role: 'system', content: sysContent }
+
+    // 2) 构造 payload（不要把占位 assistant 混进去）
+    const history = messages.value.filter(m => m.role !== 'system')
+    const payload = chat.isLogin
+      ? [sysMsg, ...history]
+      : [sysMsg, { role: 'user', content: userText }]
+
+    // 3) 现在再推一个占位 assistant，流式往里写
+    const aiPlaceholder = { role: 'assistant', content: '' }
+    messages.value.push(aiPlaceholder)
+    scrollToBottom()
+
+    // 4) 开始流式（苏格拉底模式：边流式边隐藏 [DEEP_QUESTIONS] 区块）
+    await chatStream(payload, (delta) => {
       streamingText.value += delta
+      const visible = isSocrates.value
+        ? removeDeepQuestions(streamingText.value, /*hidePartial*/ true)
+        : streamingText.value
+      aiPlaceholder.content = visible
       scrollToBottom()
     })
-    const aiMsg = { role:'assistant', content: streamingText.value }
-    messages.value.push(aiMsg)
-    streamingText.value = ''
+
+    // 5) 流结束：抽取两条深挖（仅苏格拉底），并从显示内容中彻底移除该区块
+    if (isSocrates.value) {
+      const qs = extractDeepQuestions(streamingText.value)
+      deepQuestions.value = qs.slice(0, 2)
+      aiPlaceholder.content = removeDeepQuestions(streamingText.value, /*hidePartial*/ false)
+    } else {
+      aiPlaceholder.content = streamingText.value
+    }
+
+    // 6) 存一把（确保存的是“去掉深挖块”的可视内容）
     saveChat(id, { messages: messages.value })
 
-    if(chat.settings.voiceEnabled){
-      try{ await ttsPlaySegments(aiMsg.content, chat.settings.ttsStyle || 'style2') }catch(e){ console.warn(e) }
+    // 7) 自动 TTS：仅朗读正文，分段连续播放并合并提供下载
+    if (chat.settings.voiceEnabled) {
+      const main = extractMainText(aiPlaceholder.content)
+      if (main) {
+        await ttsPlaySegments(main, chat.settings.voiceStyle || 'style2')
+      }
     }
-    if(isLogin.value){ try{ await appendMessage(id, 'assistant', aiMsg.content) }catch{} }
-  }catch(e){
-    alert('LLM 生成失败：' + e?.message)
-  }finally{
+  } catch (e) {
+    alert('LLM 生成失败：' + (e?.message || e))
+  } finally {
     sending.value = false
     scrollToBottom()
   }
 }
 
-async function onAudioDone(file){
-  try{
-    const data = await asrOnce(file)
-    const text = data?.text || ''
-    if(text) input.value = (input.value ? (input.value + ' ') : '') + text
-  }catch(e){
-    alert('ASR 失败：' + e?.message)
-  }
+/** ===== 深挖块抽取/移除 ===== */
+function extractDeepQuestions (content) {
+  const dq = []
+  if (!content) return dq
+  const start = content.indexOf('[DEEP_QUESTIONS]')
+  const end = content.indexOf('[END]')
+  if (start === -1 || end === -1 || end <= start) return dq
+
+  const block = content.slice(start + '[DEEP_QUESTIONS]'.length, end).trim()
+  block.split('\n').forEach(line => {
+    const l = line
+      .replace(/^\s*[-*]\s*/, '')   // 列表符号
+      .replace(/^\s*\d+\.\s*/, '')  // 编号
+      .trim()
+    if (l) dq.push(l)
+  })
+  return dq
 }
 
-async function speak(text){
-  try{
-    const blob = await synthesize({ text, style: 'style2' })
-    const url = URL.createObjectURL(blob)
-    const audio = new Audio(url)
-    audio.play()
-  }catch(e){
+/**
+ * 移除苏格拉底回复中的 [DEEP_QUESTIONS] 块：
+ * - hidePartial=true：若只有起始标记，无结束标记，则从起始处开始都隐藏（用于流式过程）
+ * - hidePartial=false：需要完整移除成品块（用于流式完成后）
+ */
+function removeDeepQuestions (content, hidePartial = true) {
+  if (!content) return ''
+  const start = content.indexOf('[DEEP_QUESTIONS]')
+  if (start === -1) return content
+  const end = content.indexOf('[END]', start)
+  if (end === -1) {
+    return hidePartial ? content.slice(0, start).trim() : content
+  }
+  const head = content.slice(0, start).trimEnd()
+  const tail = content.slice(end + '[END]'.length).trimStart()
+  return (head + (head && tail ? '\n\n' : '') + tail).trim()
+}
+
+/** ===== 朗读：过滤正文 + 分段合成并顺序播放 ===== */
+function extractMainText (content) {
+  // 现在消息里已无 [DEEP_QUESTIONS] 块，但依然做一次兜底处理
+  if (!content) return ''
+  const i = content.indexOf('[DEEP_QUESTIONS]')
+  const main = (i === -1 ? content : content.slice(0, i)).trim()
+  return main
+    .replace(/```[\s\S]*?```/g, '')       // 去代码块
+    .replace(/^>.*$/gm, '')               // 去引用
+    .replace(/^\s*\*\*.*\*\*\s*$/gm, '')  // 去纯粗体行
+    .trim()
+}
+
+function extractParagraphs (text) {
+  let t = text
+  const paras = t.split(/\n{2,}/).map(s => s.trim()).filter(s => s && s.length > 2)
+  const final = []
+  for (const p of paras) {
+    if (p.length <= 220) { final.push(p); continue }
+    const parts = p.split(/(?<=[。！？.!?])/)
+    let buf = ''
+    for (const part of parts) {
+      if ((buf + part).length > 220) { final.push(buf.trim()); buf = part }
+      else buf += part
+    }
+    if (buf.trim()) final.push(buf.trim())
+  }
+  return final.slice(0, 24) // 最多 24 段，避免过长
+}
+
+async function ttsPlaySegments (text, style) {
+  speaking.value = true
+  segments.value = []
+  mergedAudioUrl.value = ''
+  const paras = extractParagraphs(text)
+  const blobs = []
+  for (const p of paras) {
+    try {
+      const blob = await synthesize({ text: p, style })
+      const url = URL.createObjectURL(blob)
+      segments.value.push({ text: p, blob, url })
+      blobs.push(blob)
+      // 顺序播放
+      await new Promise((resolve) => {
+        const audio = new Audio(url)
+        audio.onended = resolve
+        audio.onerror = resolve
+        audio.play().catch(() => resolve())
+      })
+    } catch (e) {
+      console.warn('TTS segment failed', e)
+    }
+  }
+  try {
+    if (blobs.length) {
+      const merged = await mergeWaveBlobs(blobs)
+      mergedAudioUrl.value = URL.createObjectURL(merged)
+    }
+  } catch (e) { console.warn('merge failed', e) }
+  speaking.value = false
+}
+
+/** 点击“朗读”按钮：对该条消息做同样的正文过滤 + 分段播报 */
+async function speak (rawContent) {
+  try {
+    const main = extractMainText(rawContent || '')
+    if (!main) return
+    await ttsPlaySegments(main, chat.settings.voiceStyle || 'style2')
+  } catch (e) {
     alert('TTS 失败：' + e?.message)
   }
 }
 
+/** 语音转文字 */
+async function onAudioDone (file) {
+  try {
+    const data = await asrOnce(file)
+    const text = data?.text || ''
+    if (text) input.value = (input.value ? (input.value + ' ') : '') + text
+  } catch (e) {
+    alert('ASR 失败：' + e?.message)
+  }
+}
+
+/** 点选深挖问题，回填输入框 */
+function fillQuestion (q) { input.value = q }
+
+/** 生命周期 */
 onMounted(hydrateSessions)
 </script>
 
@@ -422,19 +529,14 @@ onMounted(hydrateSessions)
   padding: 8px 14px;
   box-shadow: var(--shadow);
   border: 1px solid var(--line);
-
 }
-
 
 .content.live{ margin-top: 6px; }
 
-.inline-actions{
-  display: flex; gap: 8px; margin-top: 6px;
-}
+.inline-actions{ display: flex; gap: 8px; margin-top: 6px; }
 
 .typing{
-  display: inline-block;
-  position: relative;
+  display: inline-block; position: relative;
 }
 .typing-dot{
   display:inline-block;width:6px;height:6px;border-radius:50%;
@@ -444,9 +546,29 @@ onMounted(hydrateSessions)
 .typing-dot:nth-child(3){ animation-delay: .4s }
 @keyframes blink { 0%, 80%, 100% { opacity:.2 } 40% { opacity: 1 } }
 
+/* 苏格拉底深挖面板（紧贴输入框上方） */
+.dq-panel{
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  padding: .5rem .75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: center;
+}
+.dq-title{ font-size: 12px; color: var(--muted); margin-right: .5rem; }
+.dq-list{ display: flex; gap: .5rem; flex-wrap: wrap; }
+.dq-item{
+  border: none; background: #eef2ff; color: #312e81;
+  border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+}
+
 /* 输入区（吸底） */
 .composer{
-  position: sticky; bottom: 0; z-index: 4;
+  position: sticky; bottom: 0; z-index: 3;
   background: var(--panel);
   border-top: 1px solid var(--line);
   box-shadow: 0 -6px 24px rgba(0,0,0,0.04);
@@ -480,8 +602,25 @@ onMounted(hydrateSessions)
 }
 .hint{ color: var(--muted); }
 
-
-
-
-
+/* Markdown 基本样式 */
+.content.markdown-body h1,
+.content.markdown-body h2,
+.content.markdown-body h3 {
+  margin: .4rem 0 .25rem;
+  font-weight: 600;
+}
+.content.markdown-body pre {
+  background: #f6f8fa;
+  padding: .5rem .75rem;
+  border-radius: 6px;
+  overflow: auto;
+}
+.content.markdown-body code {
+  background: #f6f8fa;
+  padding: 0 .25rem;
+  border-radius: 4px;
+}
+.content.markdown-body ul {
+  padding-left: 1.2rem;
+}
 </style>

@@ -4,7 +4,7 @@
     <header class="header">
       <div class="row left">
         <span class="badge">{{ appName }}</span>
-        <span class="faint">莫兰迪配色 · 统一语音交互平台</span>
+        <span class="faint">AI语音聊天平台    组长：朱佳鸿    组员：高俊 黄灿 陆玉阳</span>
       </div>
       <div class="row right">
         <router-link class="btn ghost" to="/chat">聊天</router-link>

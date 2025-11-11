@@ -14,8 +14,10 @@ export async function removeSession(id){
   return data
 }
 export async function appendMessage(session_id, role, content){
-  const body = { session_id, role, content }
-  const { data } = await httpCore.post('/chat/messages', body)
+  const body = { session_id: String(session_id), role, content }
+  const { data } = await httpCore.post('/chat/messages', body, {
+    headers: { 'Content-Type': 'application/json' }
+  })
   return data
 }
 export async function listMessages(session_id){

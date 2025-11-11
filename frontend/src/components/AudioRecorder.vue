@@ -198,3 +198,68 @@ watchEffect(() => {
   }
 })
 </script>
+<style scoped>
+.audio-recorder{
+  background: #fff;
+  border: 1px solid rgba(229, 231, 235, .9);
+  border-radius: 999px;
+  padding: 6px 10px 6px 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .03);
+  min-height: 40px;
+}
+
+/* 按钮 */
+.btn{
+  border: none;
+  outline: none;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13.5px;
+  padding: 6px 14px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  white-space: nowrap;
+  min-width: 88px;
+  justify-content: center;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(37, 99, 235, .32);
+}
+.btn:disabled{
+  opacity: .65;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* 录音中变成红色 */
+.btn.danger{
+  background: #ef4444;
+}
+.btn.danger:hover{
+  background: #dc2626;
+}
+
+/* 提示文字 */
+.hint{
+  font-size: 12.5px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+/* 小屏变竖排，按钮保持圆角 */
+@media (max-width: 520px){
+  .audio-recorder{
+    border-radius: 14px;
+    flex-wrap: wrap;
+  }
+  .btn{
+    width: 100%;
+  }
+}
+</style>
