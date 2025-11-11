@@ -80,4 +80,4 @@ export GOPROXY="https://goproxy.cn,direct"
 $env:GONOSUMDB = "github.com"
 
 
-npm install markdown-it
+npm i markdown-it dompurify highlight.js

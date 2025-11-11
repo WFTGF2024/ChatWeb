@@ -13,7 +13,6 @@ export SA1="cat"
 export SQ2="Your favorite teacher?"
 export SA2="alice"
 ```
-
 ## 1) Auth 相关
 
 ### 1.1 注册
@@ -38,6 +37,11 @@ curl -X POST "$BASE_URL/api/auth/register" \
 ```
 
 ### 1.2 登录 → 提取 TOKEN
+```bash
+curl -sS -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" | jq -r .token
+```
 ```bash
 TOKEN=$(curl -sS -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
@@ -127,6 +131,12 @@ TOKEN=$(curl -sS -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$NEW_PASSWORD\"}" | jq -r .token) && echo "$TOKEN"
 ```
+```bash
+curl -sS -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"$USERNAME\",\"password\":\"$NEW_PASSWORD\"}"
+```
+{"expire_at":"2025-11-12T11:37:03+08:00","success":true,"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjI5MTg2MjMsInVzZXJfaWQiOjF9.jesg2jqCdpxvPkMSc-fAd4tsbUAZX32OjWyr0qKceog"}
 ```
 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjI4NzYwNjAsInVzZXJfaWQiOjF9.OlwdYL0pWSnqr0d6BuqVShoiRSN9BO69ar9FKYV-qnU
 ```
@@ -239,12 +249,17 @@ curl -X GET "$BASE_URL/api/membership/orders/$USER_ID/recent?n=3" \
 ## 4) Web 相关
 
 ### 4.1 创建页面（可抓取）
-
+https://www.nowcoder.com/
+https://www.njupt.edu.cn/
+https://leetcode.cn/
 ```bash
 curl -X POST "$BASE_URL/web/items" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://www.njupt.edu.cn/","title":"Example Home","fetch":true}'
+  -d '{"url":"https://leetcode.cn/","title":"Example Home","fetch":true}'
+```
+```
+{"error":"db error"}
 ```
 ```
 {"id":1,"user_id":1,"url":"https://www.njupt.edu.cn/","title":"Example Home","content":"旧版入口 English 电子邮件 首页 南邮概况 \u003e 学校简介 学校章程 南邮精神 校标校训 南邮校史 南邮校歌 现任领导 视频展播 校园实景漫... 校园景色 校区地图 内设机构 \u003e 党政群部门 教学机构 基层党的组......... 科研机构 直属单位和... 独立学院 学科建设 科学研究 \u003e 自然科学研... 社会科学研... 高等教育研... 科210023 三牌楼校区地址：南京市新模范马路66号 邮编：210003 锁金村校区地址：南京市龙蟠路177号 邮编：210042 联系电话:（86）-25-85866888 传真:（86）-25-85866999 邮箱:njupt@njupt.edu.cn 苏公网安备32011302320419号 |苏ICP备11073489号-1 版权所有：南京邮电大学","created_at":"2025-11-10T23:50:34.639+08:00","updated_at":"2025-11-10T23:50:34.639+08:00"}
@@ -349,6 +364,7 @@ SESSION_ID=$(curl -sS -X POST "$BASE_URL/chat/sessions" \
 2
 ```
 
+
 ### 5.2 列出会话
 
 ```bash
@@ -390,7 +406,16 @@ curl -X GET "$BASE_URL/chat/sessions/$SESSION_ID/messages" \
 ```
 [{"id":1,"user_id":1,"session_id":2,"content":"Hello from curl","role":"user","created_at":"2025-11-10T23:56:10+08:00"},{"id":2,"user_id":1,"session_id":2,"content":"Second message via alias","role":"user","created_at":"2025-11-10T23:56:35+08:00"}]
 ```
-### 5.6 一次性补全（可能依赖 LLM 配置，失败忽略）
+### 5.6 删除会话
+```bash
+curl -X DELETE "$BASE_URL/chat/sessions/11" \
+  -H "Authorization: Bearer $TOKEN"
+```
+```bash
+{"message":"会话已删除","success":true}
+```
+
+### 5.7 一次性补全（可能依赖 LLM 配置，失败忽略）
 
 ```bash
 curl -X POST "$BASE_URL/chat/sessions/$SESSION_ID/complete" \
@@ -402,7 +427,7 @@ curl -X POST "$BASE_URL/chat/sessions/$SESSION_ID/complete" \
 {"content":"Hello!"}
 ```
 
-### 5.7 流式补全（原样打印流）
+### 5.8 流式补全（原样打印流）
 
 ```bash
 curl -N -X POST "$BASE_URL/chat/sessions/$SESSION_ID/stream" \

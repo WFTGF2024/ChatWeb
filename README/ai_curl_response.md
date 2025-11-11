@@ -173,7 +173,6 @@ curl http://127.0.0.1:7206/health
 
 # <font color="red"> Embedding 模块</font>
 
-虽然你主要是通过 `core.py` 调用，但也可以单独测试：
 
 ## 单条 GET
 
