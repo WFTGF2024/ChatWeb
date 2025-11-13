@@ -111,59 +111,92 @@ func (s *membershipService) GetAllMemberships() ([]models.MembershipResponse, er
 }
 
 func (s *membershipService) CreateMembership(req models.CreateMembershipRequest) (*models.MembershipResponse, error) {
-	log.Info("开始创建会员信息")
-	log.WithFields(log.Fields{
-		"userID":     req.UserID,
-		"startDate":  req.StartDate,
-		"expireDate": req.ExpireDate,
-		"status":     req.Status,
-	}).Debug("创建会员信息请求参数")
+    log.Info("开始创建会员信息")
+    log.WithFields(log.Fields{
+        "userID":     req.UserID,
+        "startDate":  req.StartDate,
+        "expireDate": req.ExpireDate,
+        "status":     req.Status,
+    }).Debug("创建会员信息请求参数")
 
-	// 用户存在校验
-	var user models.User
-	if err := database.DB.First(&user, req.UserID).Error; err != nil {
-		log.WithError(err).WithField("userID", req.UserID).Warn("用户不存在")
-		return nil, errors.New("用户不存在")
-	}
+    // 用户存在校验
+    var user models.User
+    if err := database.DB.First(&user, req.UserID).Error; err != nil {
+        log.WithError(err).WithField("userID", req.UserID).Warn("用户不存在")
+        return nil, errors.New("用户不存在")
+    }
 
-	// 唯一性校验（一个用户只能有一条会员记录）
-	var existing models.MembershipInfo
-	if err := database.DB.Where("user_id = ?", req.UserID).First(&existing).Error; err == nil {
-		log.WithField("userID", req.UserID).Warn("用户已有会员信息")
-		return nil, errors.New("用户已有会员信息")
-	}
+    // 检查用户是否已有会员记录
+    var existing models.MembershipInfo
+    if err := database.DB.Where("user_id = ?", req.UserID).First(&existing).Error; err == nil {
+        // 用户已有会员记录，延长1个月有效期
+        log.WithField("userID", req.UserID).Info("用户已有会员信息，将延长1个月有效期")
 
-	// 解析日期字符串为 time.Time
-	start, err := parseAnyDate(req.StartDate)
-	if err != nil {
-		return nil, fmt.Errorf("start_date 解析失败: %w", err)
-	}
-	expire, err := parseAnyDate(req.ExpireDate)
-	if err != nil {
-		return nil, fmt.Errorf("expire_date 解析失败: %w", err)
-	}
+        // 计算新的有效期，从现有有效期开始延长1个月
+        var newExpireDate time.Time
+        // 如果现有会员还未过期，从现有过期日期开始延长1个月
+        if existing.ExpireDate.After(time.Now()) {
+            newExpireDate = existing.ExpireDate.AddDate(0, 1, 0) // 加1个月
+        } else {
+            // 如果现有会员已过期，从当前时间开始延长1个月
+            newExpireDate = time.Now().AddDate(0, 1, 0) // 从当前时间加1个月
+        }
 
-	newMembership := models.MembershipInfo{
-		UserID:     req.UserID,
-		StartDate:  start,
-		ExpireDate: expire,
-		Status:     req.Status,
-	}
+        // 更新会员信息
+        updateData := map[string]interface{}{
+            "expire_date": newExpireDate,
+            "status":      "active",
+        }
 
-	if err := database.DB.Create(&newMembership).Error; err != nil {
-		log.WithError(err).Error("创建会员信息失败")
-		return nil, errors.New("创建会员信息失败")
-	}
+        if err := database.DB.Model(&existing).Updates(updateData).Error; err != nil {
+            log.WithError(err).Error("延长会员有效期失败")
+            return nil, errors.New("延长会员有效期失败")
+        }
 
-	resp := models.MembershipResponse{
-		MembershipID: newMembership.MembershipID,
-		UserID:       newMembership.UserID,
-		StartDate:    fmtDate(newMembership.StartDate),
-		ExpireDate:   fmtDate(newMembership.ExpireDate),
-		Status:       newMembership.Status,
-	}
-	log.WithField("membershipID", newMembership.MembershipID).Info("创建会员信息成功")
-	return &resp, nil
+        // 返回更新后的会员信息
+        resp := models.MembershipResponse{
+            MembershipID: existing.MembershipID,
+            UserID:       existing.UserID,
+            StartDate:    fmtDate(existing.StartDate),
+            ExpireDate:   fmtDate(newExpireDate),
+            Status:       "active",
+        }
+
+        log.WithField("membershipID", existing.MembershipID).Info("延长会员有效期成功")
+        return &resp, nil
+    }
+
+    // 解析日期字符串为 time.Time
+    start, err := parseAnyDate(req.StartDate)
+    if err != nil {
+        return nil, fmt.Errorf("start_date 解析失败: %w", err)
+    }
+    expire, err := parseAnyDate(req.ExpireDate)
+    if err != nil {
+        return nil, fmt.Errorf("expire_date 解析失败: %w", err)
+    }
+
+    newMembership := models.MembershipInfo{
+        UserID:     req.UserID,
+        StartDate:  start,
+        ExpireDate: expire,
+        Status:     req.Status,
+    }
+
+    if err := database.DB.Create(&newMembership).Error; err != nil {
+        log.WithError(err).Error("创建会员信息失败")
+        return nil, errors.New("创建会员信息失败")
+    }
+
+    resp := models.MembershipResponse{
+        MembershipID: newMembership.MembershipID,
+        UserID:       newMembership.UserID,
+        StartDate:    fmtDate(newMembership.StartDate),
+        ExpireDate:   fmtDate(newMembership.ExpireDate),
+        Status:       newMembership.Status,
+    }
+    log.WithField("membershipID", newMembership.MembershipID).Info("创建会员信息成功")
+    return &resp, nil
 }
 
 func (s *membershipService) UpdateMembership(membershipID uint, req models.UpdateMembershipRequest) error {
